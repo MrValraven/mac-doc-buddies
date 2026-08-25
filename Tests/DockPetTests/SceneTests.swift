@@ -27,7 +27,12 @@ enum SceneTests {
             // the whole nine seconds runs in a test in no time at all.
             var scene = BirthdayScene()
             scene.arrive()
-            eq(scene.phase, .gather, "arriving ends the approach")
+            let (leaving, entered) = scene.advance(by: 0.1)
+            eq(entered, .gather, "arriving ends the approach")
+            // [M14] The tick it happens on has to *report* it. The director sits the two
+            // cats down on this change and on nothing else, so a scene that entered
+            // `.gather` silently was a scene given entirely on the walk sheet.
+            eq(leaving, .approach, "and says so, rather than changing the phase silently")
 
             var seen: [BirthdayScene.Phase] = [scene.phase]
             for _ in 0..<400 {
@@ -118,6 +123,7 @@ enum SceneTests {
             var scene = BirthdayScene()
             scene.arrive()
             scene.arrive()
+            scene.advance(by: 0.1)
             eq(scene.phase, .gather,
                "arriving twice is harmless: the pair touches for several consecutive ticks")
         }

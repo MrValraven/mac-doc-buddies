@@ -126,6 +126,18 @@ public struct CuddleRoutine: Equatable {
     /// say which one it was.
     public private(set) var wasAbandoned = false
 
+    /// Set by `arrive()`, spent by the next `advance`.
+    ///
+    /// A latch rather than the transition itself, and that distinction is the whole
+    /// correctness of this type's contract: **every phase change is reported by `advance`,
+    /// exactly one per call.** A method that moved the phase on its own would move it
+    /// behind the caller's back, because the caller learns about changes from the pair
+    /// `advance` hands back, and that pair is read after `arrive()` would already have
+    /// changed things. The phase entered on arrival would then be the one phase whose
+    /// one-shot work never ran, which on screen is two cats saying every line of the nap
+    /// while still walking, because sitting down is exactly that work.
+    private var hasArrived = false
+
     public var isFinished: Bool { phase == .done }
 
     public init() {}
@@ -139,7 +151,7 @@ public struct CuddleRoutine: Equatable {
     /// to remember to ignore it. Arriving is an event; making it one removes the question.
     public mutating func arrive() {
         guard phase == .approach else { return }
-        enter(.settle)
+        hasArrived = true
     }
 
     /// Advance the routine and report the phase either side of the step.
@@ -160,9 +172,12 @@ public struct CuddleRoutine: Equatable {
 
         switch phase {
         case .approach:
-            // Nothing to test but the ceiling: arrival comes in through `arrive()`, which
-            // the caller drives from the live frames.
-            if timeInPhase >= Self.approachCeiling {
+            // Arrival is tested before the ceiling, so a pair that gets there on the very
+            // last tick settles down instead of being called off for being slow. The kiss
+            // orders its two the same way, for the same reason.
+            if hasArrived {
+                enter(.settle)
+            } else if timeInPhase >= Self.approachCeiling {
                 wasAbandoned = true
                 enter(.done)
             }

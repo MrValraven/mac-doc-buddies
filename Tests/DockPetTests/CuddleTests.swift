@@ -40,8 +40,24 @@ enum CuddleTests {
         do {
             var routine = CuddleRoutine()
             routine.arrive()
-            eq(routine.phase, .settle, "arriving is what ends the approach")
+            let (previous, current) = routine.advance(by: 0.25)
+            eq(current, .settle, "arriving is what ends the approach")
             eq(routine.timeInPhase, 0, "and the settling starts from the top, not mid-phase")
+            // The bug this pins: `arrive()` used to change the phase itself, so the tick a
+            // pair arrived on reported settle → settle and the caller, which hangs its
+            // one-shot work off a *change*, never sat the cats down. They said every line
+            // of the nap on the walk sheet, still walking, and wandered apart through it.
+            eq(previous, .approach,
+               "and the tick it happens on reports the approach it left, so the caller can"
+               + " see the change and sit them down")
+        }
+
+        do {
+            var routine = CuddleRoutine()
+            routine.arrive()
+            let (previous, current) = routine.advance(by: 600)
+            eq(previous, .approach, "arriving on a stalled tick is still one reported change")
+            eq(current, .settle, "and one phase, not the settling skipped on the way past")
         }
 
         do {
@@ -101,7 +117,9 @@ enum CuddleTests {
             var routine = CuddleRoutine()
             routine.arrive()
             routine.advance(by: 600)
-            eq(routine.phase, .snuggle, "a stalled timer advances one phase, not the whole nap")
+            eq(routine.phase, .settle, "a stalled timer advances one phase, not the whole nap")
+            routine.advance(by: 600)
+            eq(routine.phase, .snuggle, "so the pair is sat down before anybody speaks")
             routine.advance(by: 600)
             eq(routine.phase, .snuggle,
                "and spends a bounded second there, not the ten minutes it was handed")
@@ -116,9 +134,11 @@ enum CuddleTests {
             var routine = CuddleRoutine()
             routine.arrive()
             routine.advance(by: 0)
-            eq(routine.phase, .settle, "a zero-length tick is not a tick")
+            eq(routine.phase, .approach, "a zero-length tick is not a tick, arrival or not")
             routine.advance(by: -5)
-            eq(routine.phase, .settle, "and neither is a clock that ran backwards")
+            eq(routine.phase, .approach, "and neither is a clock that ran backwards")
+            routine.advance(by: 0.25)
+            eq(routine.phase, .settle, "the arrival is still there to be spent afterwards")
         }
 
         do {

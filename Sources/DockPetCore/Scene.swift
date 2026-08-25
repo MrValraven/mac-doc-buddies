@@ -102,6 +102,17 @@ public struct BirthdayScene: Equatable {
     /// to say which one it was.
     public private(set) var wasAbandoned = false
 
+    /// [M14] Set by `arrive()`, spent by the next `advance`.
+    ///
+    /// A latch rather than the transition itself. `arrive()` used to move the phase on its
+    /// own, which moved it behind the caller's back: `SceneDirector` hangs the one-shot work
+    /// for a phase off the pair `advance` hands back, and that pair is read after `arrive()`
+    /// had already changed things, so entering `.gather` was reported as no change at all.
+    /// The work `.gather` owns is sitting the two cats down, so they gave the whole scene
+    /// still walking. Found in M14's nap, which copied this shape and this bug; fixed in
+    /// both, because the birthday gets one attempt a year.
+    private var hasArrived = false
+
     public var isFinished: Bool { phase == .done }
 
     public init() {}
@@ -115,7 +126,7 @@ public struct BirthdayScene: Equatable {
     /// Arriving is an event; making it one removes the question.
     public mutating func arrive() {
         guard phase == .approach else { return }
-        enter(.gather)
+        hasArrived = true
     }
 
     /// Advance the scene, reporting the phase either side of the step.
@@ -139,9 +150,11 @@ public struct BirthdayScene: Equatable {
 
         switch phase {
         case .approach:
-            // Nothing to test but the ceiling: arrival comes in through `arrive()`, which
-            // the caller drives from the live frames.
-            if timeInPhase >= Self.approachCeiling {
+            // Arrival is tested before the ceiling, so a pair that gets there on the very
+            // last tick still gets its scene rather than being called off for being slow.
+            if hasArrived {
+                enter(.gather)
+            } else if timeInPhase >= Self.approachCeiling {
                 wasAbandoned = true
                 enter(.done)
             }
