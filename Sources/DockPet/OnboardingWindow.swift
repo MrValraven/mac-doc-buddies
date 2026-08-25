@@ -83,6 +83,17 @@ final class OnboardingWindow: NSWindow {
 
     @objc private func grantPressed() {
         onGrant()
+
+        // Say what was just done. `onGrant` opens the Accessibility pane, and the system
+        // alert that also deep-links there appears only the first time it is ever asked
+        // for — so from the second press onwards this line is the only feedback the press
+        // produces, and "Waiting for permission…" sitting unchanged reads as a dead button.
+        // The poll replaces this with the real answer the moment the Dock is found.
+        //
+        // Kept to one short line on purpose: `statusLabel` is a non-wrapping label and the
+        // window was sized to its content at init, so a sentence wider than the 380 pt
+        // column would be clipped rather than wrapped.
+        statusLabel.stringValue = "Opened Settings — tick DockPet in the list."
     }
 
     /// Called from the 500 ms poll the first time the Dock is actually located. Says so,

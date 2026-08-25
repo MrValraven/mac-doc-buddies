@@ -194,7 +194,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // item as a side effect of checking something else.
         if !options.isSelfTest {
             if case .failure(let error) = LoginItem.setEnabled(config.launchAtLogin) {
+                // SPEC 11a: a registration failure is logged and clamped to "off", never
+                // fatal. Clamped as well as logged so the ticked box in Settings stops
+                // claiming something that did not happen — a silently-ignored tick is
+                // indistinguishable from a working one until the next reboot.
                 print("[config] could not set launch at login (\(error.localizedDescription))")
+                print("[config] clamping launchAtLogin to false — \(LoginItem.statusDescription)")
+                config.launchAtLogin = false
             }
             print("[config] launch at login: \(LoginItem.statusDescription)")
         }
@@ -275,9 +281,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         } else if options.isSelfTest {
             print("  accessibility    : NOT granted (self-test: not prompting)")
         } else {
-            print("  accessibility    : not granted — requesting it now")
+            // [M11] Asked for by the onboarding window's button below, and nowhere else on
+            // this path. Prompting here as well put the system TCC alert and DockPet's own
+            // window on screen on the same run-loop turn, fighting over a first-run user's
+            // attention — and spent the one-shot alert before the button that exists to
+            // present it deliberately ever got the click.
+            print("  accessibility    : not granted — the welcome window will ask")
             print("                     the cat stays hidden until it is granted")
-            DockTiles.requestTrust()
         }
 
         installReloadSignalHandler()
@@ -652,6 +662,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         settle(0.3)
         check(menuBarItem != nil, "and comes back when re-enabled")
 
+        // --- [M11] launch at login ---
+        //
+        // `simulate(launchAtLogin:)` has existed since the checkbox did and nothing ever
+        // called it, so the one control whose effect a user cannot see for themselves —
+        // it only shows at the next reboot — was also the one control with no assertion
+        // behind it. The registration itself is deliberately not exercised: `applyConfig`
+        // skips `LoginItem` under a self-test, because a test run must not rewrite the
+        // real login item on this Mac. What is checked is the wiring either side of it,
+        // which is where a checkbox silently fails to mean anything.
+        let loginBefore = config.launchAtLogin
+        window.simulate(launchAtLogin: false)
+        check(!config.launchAtLogin, "the login checkbox reaches the config",
+              "got \(config.launchAtLogin)")
+        window.simulate(launchAtLogin: true)
+        check(config.launchAtLogin, "and switches back on", "got \(config.launchAtLogin)")
+        settle(0.7)
+        if let data = try? Data(contentsOf: ConfigStore.url),
+           let saved = try? JSONDecoder().decode(PetConfig.self, from: data) {
+            check(saved.launchAtLogin, "and is persisted, so the next launch agrees with the box",
+                  "file says launchAtLogin=\(saved.launchAtLogin)")
+        } else {
+            check(false, "config.json could be read back to check launchAtLogin persisted")
+        }
+        window.simulate(launchAtLogin: loginBefore)
+
         // --- [M11] the keys this window has no control for ---
         //
         // `birthday` and `dedication` are the gift layer, and neither has a control in the
@@ -875,10 +910,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         let dt = lastPollTime == 0 ? 0 : now - lastPollTime
         lastPollTime = now
 
-        // [M11] Bounded lifetime: once the window has said its piece and taken itself off
-        // screen, drop the reference rather than holding it — and re-dereferencing it —
-        // for the rest of the app's run.
-        if let onboarding = onboarding, onboarding.isFinished, !onboarding.isVisible {
+        // [M11] Bounded lifetime: once the window is off screen, drop the reference
+        // rather than holding it — and re-dereferencing it twice a second — for the rest
+        // of the app's run.
+        //
+        // Off screen, not `isFinished && off screen`. The window is `.closable`, and
+        // `isFinished` is only ever set by `markGranted()`, so a first-run user who closed
+        // it by hand without granting anything left it retained forever. Kept closable
+        // rather than solving it by removing the close button: "not now" is a legitimate
+        // answer on someone else's Mac, and the menu bar's "Grant Accessibility…" is the
+        // way back — same shared ask, now that it actually opens the pane.
+        if let onboarding = onboarding, !onboarding.isVisible {
             self.onboarding = nil
         }
 
@@ -1195,7 +1237,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// restart.
     func requestDockConfinement() {
         print("[state] requesting Accessibility so the pet can be confined to the Dock")
-        DockTiles.requestTrust()
+
+        // Two asks, because neither is enough on its own.
+        //
+        // `AXIsProcessTrustedWithOptions(prompt:)` shows the system alert — the one that
+        // deep-links and registers *this* binary's signature — but only while no TCC
+        // record exists for us. Once the user has answered it, dismissed it, or clicked
+        // Deny, every later call returns false and presents nothing at all. A button
+        // labelled "Open Accessibility Settings…" that does nothing from the second click
+        // onwards is precisely the dead end the onboarding window exists to prevent.
+        let prompted = DockTiles.requestTrust()
+
+        // So always open the pane too. It is a no-op cost when the alert did appear (the
+        // pane the alert links to is the pane we open), and it is the whole fix when it
+        // did not.
+        if let url = URL(string: "x-apple.systempreferences:"
+                         + "com.apple.preference.security?Privacy_Accessibility") {
+            let opened = NSWorkspace.shared.open(url)
+            print("[state] system alert shown: \(!prompted ? "no (already answered once)" : "yes")"
+                  + ", Accessibility pane opened: \(opened)")
+        }
     }
 
     var statusSummary: String {
@@ -1260,11 +1321,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// `rebuildSprites` is skipped by `reload()`, which reloads the sheets itself straight
     /// afterwards and would otherwise rebuild the view twice.
     func applyConfig(_ newConfig: PetConfig, persist: Bool, rebuildSprites: Bool = true) {
+        var newConfig = newConfig
         let previous = config
         // [M11] Guarded the same way as the launch-time call: a self-test must not rewrite
         // the user's real login item as a side effect of checking something else.
         if !options.isSelfTest, newConfig.launchAtLogin != config.launchAtLogin {
-            LoginItem.setEnabled(newConfig.launchAtLogin)
+            if case .failure(let error) = LoginItem.setEnabled(newConfig.launchAtLogin) {
+                // SPEC 11a again: logged and clamped to "off". Clamped on `newConfig`,
+                // before it is assigned and before `scheduleSave()` writes it out, so what
+                // lands in config.json is what actually happened rather than what was
+                // asked for. Ticking the box on a Mac that will not accept our local
+                // self-signed identity used to persist `"launchAtLogin": true` and give
+                // the user no sign it had not taken.
+                print("[config] could not set launch at login (\(error.localizedDescription))")
+                print("[config] clamping launchAtLogin to false — \(LoginItem.statusDescription)")
+                newConfig.launchAtLogin = false
+            }
         }
         config = newConfig
 

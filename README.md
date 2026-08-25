@@ -46,9 +46,12 @@ there. Two separate things follow from that:
 - **Accessibility.** The grant is per machine, so it has to be given again there — the grant
   made while building doesn't travel with the app. DockPet asks for this itself: on first
   launch, if Accessibility isn't granted, a small window explains what the cat needs and why,
-  with a button that asks the system to prompt for the permission, which deep-links to the
-  right System Settings pane. Once it's granted, the cat appears within about half a second —
-  the same 500 ms poll that locates the Dock notices the grant on its own.
+  with a button that opens the Accessibility pane directly *and* asks the system to prompt.
+  Both, because the system prompt only ever appears while no answer has been recorded — after
+  a Deny, or a dismissal, opening the pane is the only thing left that does anything. The same
+  button lives in the menu bar as **Grant Accessibility…**. Once it's granted, the cat appears
+  within about half a second — the same 500 ms poll that locates the Dock notices the grant on
+  its own.
 
 Because the grant follows the code signature rather than the exact build, it survives a later
 update: rebuild and hand over a new `.app` signed with the same `makecert.sh` identity, and
