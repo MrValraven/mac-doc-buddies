@@ -325,6 +325,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         return (sets, notes)
     }
 
+    /// Where a cat with no history of its own starts out.
+    ///
+    /// [M11] Alternating ends, walking towards each other. Two same-size pets both at
+    /// distance 0 have **identical** frames, and `MeetingCoordinator.haveMet` is true for
+    /// identical frames (`a.intersects(b) || a == b`) — so an unspaced cast launches
+    /// stacked into what reads as one cat, and the very first located poll spends the 60
+    /// second cooldown on a meeting the pair is having with itself. They would only drift
+    /// apart once their behaviour machines diverged, which an 8–22 second walk dwell can
+    /// take a while to do.
+    ///
+    /// The strip has not been measured when this is called — at launch nothing has polled
+    /// yet — so the far end is a distance larger than any strip rather than a fraction of
+    /// one. Both `Walker.clamp` on the first poll and `Geometry.petFrame` itself clamp it
+    /// onto whatever the strip turns out to be; it is finite so that arithmetic on it
+    /// cannot go to infinity if it is ever advanced before that.
+    static func startingPlace(forPetAt index: Int) -> (CGFloat, Walker.Direction) {
+        index.isMultiple(of: 2) ? (0, .forward) : (Self.beyondAnyStrip, .backward)
+    }
+
+    private static let beyondAnyStrip: CGFloat = 1_000_000
+
     /// Build `pets` from a cast and wire each one up.
     ///
     /// Shared by launch and by `rebuildPets(from:)` so that a cat added from Settings is
@@ -332,7 +353,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// second cat is always the one that ends up with the older half.
     ///
     /// `spriteSets` must already hold a set for every coat in `profiles`.
-    func buildPets(from profiles: [PetProfile], size: CGSize) {
+    ///
+    /// `carrying` is where each cat was standing before a rebuild, by position. A cat that
+    /// was halfway along the Dock must not be teleported back to the near end because a
+    /// *different* cat was added or dropped.
+    func buildPets(from profiles: [PetProfile], size: CGSize,
+                   carrying: [Walker] = []) {
         pets = profiles.enumerated().map { index, profile in
             guard let set = spriteSets[profile.palette.id] else {
                 // Unreachable via either caller — both load the cast's coats first — but a
@@ -342,8 +368,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                       + " \(profile.palette.id) coat")
                 exit(1)
             }
+            // Where this cat starts: where it was standing if it survived a rebuild,
+            // otherwise its spaced-out place in a fresh cast.
+            let start = index < carrying.count
+                ? (carrying[index].distance, carrying[index].direction)
+                : Self.startingPlace(forPetAt: index)
             let pet = Pet(index: index, profile: profile, spriteSet: set,
-                          size: size, speed: CGFloat(config.speed))
+                          size: size, speed: CGFloat(config.speed),
+                          distance: start.0, direction: start.1)
             // SPEC §5: a sheet that does not slice into the frames it declares is fatal and
             // loud. Checked per pet, because each one slices the sheet for itself.
             let sliced = pet.view.sliceCount(for: .walk)
@@ -378,24 +410,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// and a cosmetic setting must not be able to take the pets away. The old cast is
     /// already gone by then, so it says so rather than failing silently.
     func rebuildPets(from cast: [PetProfile]) {
-        for pet in pets { pet.teardown() }
-        pets = []
-
+        // Sheets **first**, and only then tear the old cast down. Emptying `pets` before
+        // knowing the art will load would take every cat away over a failed disk read —
+        // precisely what the paragraph above promises cannot happen.
+        let sets: [String: SpriteSet]
         do {
-            let (sets, notes) = try loadSpriteSets(for: cast)
-            spriteSets = sets
+            let (loaded, notes) = try loadSpriteSets(for: cast)
+            sets = loaded
             for note in notes { print("[settings]   \(note)") }
         } catch {
-            print("[settings] !! could not load the sheets for \(cast.count) cat(s) — \(error)")
+            print("[settings] !! could not load the sheets for \(cast.count) cat(s), keeping"
+                  + " the cast that is on screen — \(error)")
             return
         }
-        guard let reference = spriteSet else {
-            print("[settings] !! no sheets loaded, so there is nothing to build the cast from")
+        guard let reference = cast.first.flatMap({ sets[$0.palette.id] }) ?? sets.values.first
+        else {
+            print("[settings] !! no sheets loaded, so there is nothing to build the cast"
+                  + " from — keeping the cast that is on screen")
             return
         }
 
+        // Where everyone was standing, so a surviving cat is not teleported to the near
+        // end because a different cat was added or dropped.
+        let carried = pets.map(\.walker)
+        for pet in pets { pet.teardown() }
+        pets = []
+        spriteSets = sets
+
         print("[settings] rebuilding the cast — \(cast.count) cat(s)")
-        buildPets(from: cast, size: petSizeFor(set: reference))
+        buildPets(from: cast, size: petSizeFor(set: reference), carrying: carried)
         // Place and show them now rather than waiting out the poll, so the checkbox feels
         // like it did something.
         poll()
@@ -592,6 +635,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         settle(0.3)
         check(menuBarItem != nil, "and comes back when re-enabled")
 
+        // --- [M11] the keys this window has no control for ---
+        //
+        // `birthday` and `dedication` are the gift layer, and neither has a control in the
+        // Settings window. A window that rebuilt the config from its controls set both to
+        // `nil`, `applyConfig` assigned the result wholesale and `ConfigStore.write`
+        // replaced the file — so nudging the speed slider deleted them from disk, with no
+        // way back but hand-editing JSON. These are the two lines that would have caught
+        // it, so they live here now.
+        var gift = config
+        gift.birthday = "12-25"
+        gift.dedication = "For you, {name} — every day."
+        settingsDidChange(gift)
+        window.loadFromConfig()
+        check(config.dedication == gift.dedication && config.birthday == gift.birthday,
+              "a birthday and a dedication can be configured at all",
+              "birthday=\(config.birthday ?? "nil") dedication=\(config.dedication ?? "nil")")
+
+        window.simulate(speed: 55)
+        check(config.dedication == gift.dedication,
+              "a configured dedication survives a slider move",
+              "got \(config.dedication ?? "nil")")
+        check(config.birthday == gift.birthday,
+              "and so does the birthday", "got \(config.birthday ?? "nil")")
+
+        window.simulate(color: config.color)
+        check(config.dedication != nil && config.birthday != nil,
+              "and touching the coat popup does not delete them either",
+              "birthday=\(config.birthday ?? "nil") dedication=\(config.dedication ?? "nil")")
+
+        settle(0.7)
+        if let data = try? Data(contentsOf: ConfigStore.url),
+           let saved = try? JSONDecoder().decode(PetConfig.self, from: data) {
+            check(saved.dedication == gift.dedication && saved.birthday == gift.birthday,
+                  "and they are still on disk after the debounced write — this is the one "
+                  + "that matters, because the file is what the recipient keeps",
+                  "file says birthday=\(saved.birthday ?? "nil") "
+                  + "dedication=\(saved.dedication ?? "nil")")
+        } else {
+            check(false, "config.json could be read back to check the gift layer survived")
+        }
+
         // --- [M11] the second cat ---
         //
         // Checked through to the pixels and to the live array, for the same reason the
@@ -609,7 +693,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             return found
         }
 
+        // Put the first cat in the coat that *leads the catalogue* before ticking the box.
+        // That is the configuration the bug lived in: `fillCoats` always ends on
+        // `selectItem(at:)`, so the second popup's selection is never nil, the
+        // `?? coatUnlike(...)` behind it could never run, and the new cat silently took
+        // `CatPalette.all[0]` — which is the default coat, and therefore usually the coat
+        // the first cat is already wearing. Two identical cats. Written against
+        // `all.first` rather than a colour name so it stays a real regression test however
+        // the catalogue is reordered.
+        guard let leadCoat = CatPalette.all.first?.id else {
+            print("  FAIL  the coat catalogue is empty"); exit(1)
+        }
+        window.simulate(color: leadCoat)
+        settle(0.2)
         let soloCoat = config.color
+        check(soloCoat == leadCoat, "the first cat is wearing the coat that leads the popup",
+              "got \(soloCoat), expected \(leadCoat)")
+
         window.simulate(secondCat: true)
         settle(0.2)
         check(config.pets.count == 2, "the checkbox adds a second cat to the config",
@@ -668,14 +768,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         }
 
         // --- reset ---
+        let beforeReset = config
         window.simulateReset()
         // [M11] Compared against the *validated* defaults rather than `.default` itself.
         // `validated()` fills the `pets` array in from the legacy keys, so no config that
         // has been through it is ever equal to the bare defaults — and every config in the
         // running app has been through it. The assertion, not the reset, was out of date.
-        let defaults = PetConfig.default.validated().config
+        //
+        // `birthday` and `dedication` are expected to survive the reset: this window has
+        // no control for either, and "Reset to Defaults" resets what it controls rather
+        // than deleting something the user can only put back by hand.
+        var expectedAfterReset = PetConfig.default
+        expectedAfterReset.birthday = beforeReset.birthday
+        expectedAfterReset.dedication = beforeReset.dedication
+        let defaults = expectedAfterReset.validated().config
         check(config == defaults, "Reset to Defaults restores the defaults",
               "got speed=\(config.speed) scale=\(config.scale) pets=\(config.pets.count)")
+        check(config.dedication == beforeReset.dedication,
+              "without deleting the dedication it cannot show",
+              "got \(config.dedication ?? "nil")")
 
         // --- restore the user's real settings ---
         settingsDidChange(original)
@@ -890,31 +1001,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // conversation with a human, which takes precedence over one with a cat.
         guard !a.interaction.isTalking, !b.interaction.isTalking else { return }
 
+        // An overlap with neither cat walking is not a meeting — it is two pets that
+        // happen to be standing in the same place. Cheap insurance behind the spacing in
+        // `startingPlace`: a degenerate stack must never be able to spend the cooldown on
+        // an exchange nobody could read as one.
+        guard a.behavior.state.isMoving || b.behavior.state.isMoving else { return }
+
+        // SPEC §7 11e: the *left-hand* cat speaks first, and each line addresses the other
+        // one. Which cat that is depends on where they are standing, not on their position
+        // in the array.
+        let aIsLeft = a.window.frame.minX <= b.window.frame.minX
+        let opener = aIsLeft ? a : b
+        let replier = aIsLeft ? b : a
+
         guard let exchange = meetings.meet(a.window.frame, b.window.frame,
-                                           openerName: a.profile.name,
-                                           replierName: b.profile.name) else { return }
+                                           openerName: opener.profile.name,
+                                           replierName: replier.profile.name) else { return }
 
         for pet in [a, b] {
             pet.behavior.force(.sit)
             pet.applyBehaviorState(.sit, spriteSet: sprites(for: pet))
         }
         // Face each other: the left-hand cat looks right, the right-hand cat looks left.
-        let aIsLeft = a.window.frame.minX <= b.window.frame.minX
-        a.view.facing = aIsLeft ? .right : .left
-        b.view.facing = aIsLeft ? .left : .right
+        opener.view.facing = .right
+        replier.view.facing = .left
 
         // SPEC §9: an exchange nobody can see has to be readable in the log.
-        print("[meet] pet \(a.index) → \"\(exchange.opener)\"")
-        a.interaction.showBubble(exchange.opener)
+        print("[meet] pet \(opener.index) → \"\(exchange.opener)\"")
+        opener.interaction.showBubble(exchange.opener)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + MeetingCoordinator.replyDelay) {
-            [weak self, weak b] in
+            [weak self, weak replier] in
             // Weak on both, and the pet is confirmed still in the array before it speaks:
             // Settings can rebuild the cast during the second and a half between the line
             // and its answer, and a torn-down cat must not put a bubble back on screen.
-            guard let self, let b, self.pets.contains(where: { $0 === b }) else { return }
-            print("[meet] pet \(b.index) → \"\(exchange.reply)\"")
-            b.interaction.showBubble(exchange.reply)
+            //
+            // `isTalking` is checked for the same reason the guard at the top of this
+            // method checks it, in the other direction: if the human clicked this cat
+            // during the gap, the meeting must not steal the bubble back off them.
+            guard let self, let replier,
+                  self.pets.contains(where: { $0 === replier }),
+                  !replier.interaction.isTalking else { return }
+            print("[meet] pet \(replier.index) → \"\(exchange.reply)\"")
+            replier.interaction.showBubble(exchange.reply)
         }
 
         // Both turn around and walk back the way they came, so the next tick separates
@@ -1138,17 +1267,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             // stale profile would have all three describing a cat that is not on screen.
             for (index, profile) in cast.enumerated() { pets[index].profile = profile }
 
-            // Reload when the cast is no longer wearing the coats that are loaded. Stated
-            // as "what is wanted vs what is loaded" rather than as "did `config.color`
-            // change", because with two cats the second one's coat can change while the
-            // config's own coat does not.
-            if rebuildSprites, Set(pets.map(\.profile.palette.id)) != Set(spriteSets.keys) {
-                // The recolour happens as the sheets are decoded, so a new coat means
-                // reading them again — re-scaling the sets already in memory would only
-                // resize the colours they already have.
+            // [M11] Compared **per pet and in order**, not as a set of loaded coats. Swap
+            // cat 0 to grey and cat 1 to orange in one change and the set of coats is
+            // identical, so nothing would reload: each cat would keep the other's art
+            // while its profile, the launch log, `--verbose` and `--render-test` all
+            // claimed the new coat. That is exactly the failure the per-pet sprite set
+            // exists to prevent, reintroduced one level up.
+            let wanted = cast.map(\.palette.id)
+            let reassign = wanted != Self.cast(of: previous).map(\.palette.id)
+            if rebuildSprites, !wanted.allSatisfy({ spriteSets[$0] != nil }) {
+                // A coat with no sheets in memory. The recolour happens as the sheets are
+                // decoded, so a new coat means reading them again — re-scaling the sets
+                // already in memory would only resize the colours they already have.
                 reloadSprites()
-            } else if rebuildSprites, config.scale != previous.scale {
-                applySprites(spriteSets)   // recomputes petSize at the new scale
+            } else if rebuildSprites, reassign || config.scale != previous.scale {
+                // Same sheets, different cats wearing them — or a new scale. Re-handing
+                // them out costs no disk read.
+                applySprites(spriteSets)
             }
         }
         if config.menuBarIcon != previous.menuBarIcon {

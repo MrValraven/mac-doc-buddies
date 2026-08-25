@@ -32,7 +32,16 @@ final class Pet {
     var sequencer: FrameSequencer
     var size: CGSize
 
-    init(index: Int, profile: PetProfile, spriteSet: SpriteSet, size: CGSize, speed: CGFloat) {
+    /// [M11] `distance` and `direction` are parameters rather than defaults-only because
+    /// a cast has to be **spread along the strip**. Two same-size pets both starting at
+    /// distance 0 have byte-identical frames, and `MeetingCoordinator.haveMet` is true for
+    /// identical frames — so an unspaced pair launches stacked into what reads as a single
+    /// cat and immediately spends the 60 second cooldown on a meeting with itself.
+    ///
+    /// They also let a rebuilt cast keep standing where it was, instead of every surviving
+    /// cat teleporting back to the near end because a *different* cat was added.
+    init(index: Int, profile: PetProfile, spriteSet: SpriteSet, size: CGSize, speed: CGFloat,
+         distance: CGFloat = 0, direction: Walker.Direction = .forward) {
         self.index = index
         self.profile = profile
         self.size = size
@@ -40,7 +49,7 @@ final class Pet {
         self.window = PetWindow(contentRect: NSRect(origin: .zero, size: size),
                                 content: self.view)
         self.interaction = PetInteraction()
-        self.walker = Walker(speed: speed)
+        self.walker = Walker(distance: distance, direction: direction, speed: speed)
         // Each pet gets its own seed. Two cats sharing one would idle and sleep in
         // lockstep, which looks like one cat drawn twice.
         self.behavior = BehaviorMachine(seed: UInt64.random(in: UInt64.min...UInt64.max))

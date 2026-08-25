@@ -310,19 +310,36 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         speedValue.stringValue = String(format: "%.0f px/s", speedSlider.doubleValue)
     }
 
+    /// The config this window's controls describe.
+    ///
+    /// [M11] It **starts from the config that is live** and changes only the fields this
+    /// window actually owns, rather than constructing a fresh `PetConfig` from the
+    /// controls. Constructing one silently reset every key with no control here to its
+    /// default — which meant `birthday` and `dedication`, the whole gift layer this
+    /// milestone exists for, were wiped from disk the first time anybody nudged the speed
+    /// slider, recoverable only by hand-editing JSON. Starting from the live config means
+    /// the next key added to `PetConfig` cannot repeat that: a field nobody wires up here
+    /// is carried through untouched instead of being quietly deleted.
     private func currentValues() -> PetConfig {
+        var config = settingsDelegate?.currentConfig ?? .default
+
         let coat = colorPopup.selectedItem?.representedObject as? String ?? CatPalette.default.id
         // Trimming and length are `PetConfig.validated`'s job, so a name typed here and a
         // name hand-edited into config.json get the same treatment.
         let userName = nameField.stringValue.isEmpty ? nil : nameField.stringValue
 
-        // [M11] Edited in place rather than rebuilt, so a cat's own `name` — which has no
-        // control in this window — survives every other setting being changed.
+        // [M11] Profiles are edited in place rather than rebuilt, for the same reason the
+        // config is: a cat's own `name` has no control in this window and must survive
+        // every other setting being changed.
         var pets = loadedPets.isEmpty ? [PetProfile()] : loadedPets
         pets[0].color = coat
         pets[0].userName = userName
 
         if secondCatCheck.state == .on {
+            // The popup always has a selection — `fillCoats` ends on `selectItem(at:)` —
+            // so this reads the coat `chooseCoatForANewSecondCat` just picked. The `??` is
+            // for the unreachable case only; it must never be the thing that chooses a
+            // coat, which is exactly the bug that shipped two identical cats.
             let second = secondColorPopup.selectedItem?.representedObject as? String
                 ?? Self.coatUnlike(coat)
             if pets.count > 1 {
@@ -337,14 +354,15 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
             pets.removeSubrange(1...)
         }
 
-        return PetConfig(speed: speedSlider.doubleValue.rounded(),
-                         scale: scalePopup.selectedItem?.tag ?? 2,
-                         screen: screenPopup.selectedItem?.representedObject as? String,
-                         menuBarIcon: menuBarCheck.state == .on,
-                         color: coat,
-                         userName: userName,
-                         launchAtLogin: loginCheck.state == .on,
-                         pets: pets)
+        config.speed = speedSlider.doubleValue.rounded()
+        config.scale = scalePopup.selectedItem?.tag ?? config.scale
+        config.screen = screenPopup.selectedItem?.representedObject as? String
+        config.menuBarIcon = menuBarCheck.state == .on
+        config.launchAtLogin = loginCheck.state == .on
+        config.color = coat
+        config.userName = userName
+        config.pets = pets
+        return config
     }
 
     /// Fill a coat popup from the catalogue and select an id.
@@ -379,11 +397,45 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         updateSpeedLabel()
         // A coat popup for a cat that does not exist is a control with nothing behind it.
         secondColorPopup.isEnabled = secondCatCheck.state == .on
+        chooseCoatForANewSecondCat()
         settingsDelegate?.settingsDidChange(currentValues())
+        // Re-read the cast that actually took effect, so the next edit builds on it rather
+        // than on the one this window happened to be opened with. Without this the block
+        // above would keep believing the second cat is still new and would overrule the
+        // coat the user picks for it a moment later.
+        loadedPets = settingsDelegate?.currentConfig.pets ?? loadedPets
+    }
+
+    /// Give a **newly** added second cat a coat the first one is not wearing.
+    ///
+    /// Done here, before anything reads the popup — not as a `??` fallback behind it.
+    /// `fillCoats` always ends on `selectItem(at:)`, so the popup's selection is never
+    /// `nil` and such a fallback can never run: the new cat took whatever coat happens to
+    /// lead the catalogue, which is the default coat and therefore usually the one the
+    /// first cat is already wearing. Two identical cats, and a second-cat feature that
+    /// looks broken on a default config.
+    ///
+    /// Only on the transition from one cat to two. Once the second cat is in the config,
+    /// its popup is the user's to set — including to the same coat as the first, if that
+    /// is genuinely what they want.
+    private func chooseCoatForANewSecondCat() {
+        guard secondCatCheck.state == .on, loadedPets.count < 2 else { return }
+        let taken = colorPopup.selectedItem?.representedObject as? String ?? CatPalette.default.id
+        let coat = Self.coatUnlike(taken)
+        guard let index = secondColorPopup.itemArray.firstIndex(where: {
+            ($0.representedObject as? String) == coat
+        }) else { return }
+        secondColorPopup.selectItem(at: index)
     }
 
     @objc private func resetToDefaults() {
-        settingsDelegate?.settingsDidChange(.default)
+        // [M11] Resets what this window controls, and nothing else. `birthday` and
+        // `dedication` have no control here and no way back except hand-editing JSON, so
+        // "Reset to Defaults" restores the defaults rather than deleting the gift.
+        var reset = PetConfig.default
+        reset.birthday = settingsDelegate?.currentConfig.birthday
+        reset.dedication = settingsDelegate?.currentConfig.dedication
+        settingsDelegate?.settingsDidChange(reset)
         loadFromConfig()
     }
 

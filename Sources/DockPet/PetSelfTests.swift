@@ -63,6 +63,35 @@ extension AppDelegate {
                   + " sliced=\(sliced)/\(set.walk.metadata.frameCount) walk frames"
                   + " canBecomeKey=\(pet.window.canBecomeKey)")
         }
+        // [M11] The cast must not start stacked.
+        //
+        // Two same-size pets both at walk distance 0 produce byte-identical frames, and
+        // `MeetingCoordinator.haveMet` is true for identical frames — so an unspaced pair
+        // launches on top of each other, reads as one cat, and spends the 60 second
+        // cooldown on a meeting with itself on the very first located poll.
+        //
+        // Checked against a synthetic strip rather than the live one: every pet's window
+        // still sits at the origin until the first poll positions it, and the real strip
+        // needs an Accessibility grant that a self-test cannot assume. The numbers below
+        // are a plain 1000 pt bottom strip — the geometry is what is under test, not the
+        // Dock.
+        if pets.count > 1 {
+            let strip = WalkStrip(edge: .bottom, baseline: 0, start: 0, end: 1000)
+            let frames = pets.map { pet -> CGRect in
+                var walker = pet.walker
+                walker.clamp(to: Geometry.maximumDistance(for: pet.size, on: strip))
+                return Geometry.petFrame(size: pet.size, on: strip, distance: walker.distance)
+            }
+            for i in frames.indices {
+                for j in frames.indices where j > i {
+                    let apart = !frames[i].intersects(frames[j]) && frames[i] != frames[j]
+                    if !apart { failures += 1 }
+                    print("  \(apart ? "ok  " : "FAIL") pets \(i) and \(j) start apart on a"
+                          + " 1000 pt strip — \(Self.f(frames[i])) vs \(Self.f(frames[j]))")
+                }
+            }
+        }
+
         if failures > 0 {
             print("\n\(failures) of \(pets.count) pet(s) FAILED")
             exit(1)
@@ -375,11 +404,23 @@ extension AppDelegate {
         }
 
         // --- the name -------------------------------------------------------------
-        // One config key for the whole app, so this is applied once rather than per pet.
+        //
+        // [M11] Built by mutating the **live** config rather than by constructing a fresh
+        // `PetConfig`. A hand-built one has an empty `pets`, which `cast(of:)` normalises
+        // to a single profile — under a two-cat config that is a changed cast, so
+        // `applyConfig` would tear both cats down and rebuild one. Every check below would
+        // then still pass, on the closed detached pet captured at the top of this method,
+        // testing nothing that is live.
         let originalConfig = config
-        applyConfig(PetConfig(speed: config.speed, scale: config.scale, screen: config.screen,
-                              menuBarIcon: config.menuBarIcon, color: config.color,
-                              userName: "Testcat"), persist: false)
+        var named = config
+        named.userName = "Testcat"
+        for index in named.pets.indices { named.pets[index].userName = "Testcat" }
+        applyConfig(named, persist: false)
+        check(pets.count == originalConfig.pets.count,
+              "renaming does not rebuild the cast, so these are still the live pets",
+              "\(pets.count) pets for \(originalConfig.pets.count) profiles")
+        check(pets.contains { $0 === primary },
+              "and the pet captured at the start of this test is still one of them")
         check(effectiveUserName == "Testcat", "a configured name is the one the pet uses",
               "got \(String(describing: effectiveUserName))")
 
@@ -393,10 +434,57 @@ extension AppDelegate {
         }
         check(sawTheName, "and it reaches the bubble",
               "last was \"\(primary.interaction.lastReply ?? "")\"")
+        primary.interaction.dismissBubble()
+
+        // --- [M11] each cat answers with its OWN name ------------------------------
+        //
+        // The nap half of the two-cat dispatch bug is covered per pet above — a delegate
+        // resolving to `primaryPet` would fail those. This is the name half, which
+        // otherwise rests entirely on code reading. Giving the cats *different* names is
+        // the whole point: with one cat, or with two that share a name, answering for pet
+        // 0 looks exactly like answering correctly.
+        var distinct = config
+        for index in distinct.pets.indices {
+            distinct.pets[index].userName = "Cat\(index)Name"
+        }
+        distinct.userName = distinct.pets.first?.userName
+        applyConfig(distinct, persist: false)
+
+        for pet in pets {
+            let expected = pet.profile.userName ?? effectiveUserName
+            let resolved = interactionUserName(for: pet.interaction)
+            check(resolved == expected,
+                  "pet \(pet.index): the delegate resolves this cat's name, not pet 0's",
+                  "got \(resolved ?? "nil"), expected \(expected ?? "nil")")
+            check(pet.profile.userName == "Cat\(pet.index)Name",
+                  "pet \(pet.index): and it is the name this cat was actually given",
+                  "profile says \(pet.profile.userName ?? "nil")")
+
+            var sawItsOwn = false
+            for _ in 0..<12 {
+                pet.interaction.dismissBubble()
+                pet.interaction.say(.hello)
+                if pet.interaction.lastReply?.contains("Cat\(pet.index)Name") == true {
+                    sawItsOwn = true; break
+                }
+            }
+            check(sawItsOwn, "pet \(pet.index): and its own name reaches its own bubble",
+                  "last was \"\(pet.interaction.lastReply ?? "")\"")
+            pet.interaction.dismissBubble()
+        }
+
+        if pets.count > 1 {
+            let first = interactionUserName(for: pets[0].interaction)
+            let second = interactionUserName(for: pets[1].interaction)
+            check(first != second,
+                  "two cats with different names are told apart — this is the check that "
+                  + "fails when the delegate answers for the wrong animal",
+                  "both got \(first ?? "nil")")
+        }
 
         applyConfig(originalConfig, persist: false)
         check(config == originalConfig, "the test restored your original settings")
-        primary.interaction.dismissBubble()
+        for pet in pets { pet.interaction.dismissBubble() }
 
         // --- a picture of it, since nobody reading this log can see my screen ------
         if let path = options.shotPath {
