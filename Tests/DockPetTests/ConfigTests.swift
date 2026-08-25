@@ -265,5 +265,37 @@ enum ConfigTests {
             check(corrections.contains { $0.field.hasPrefix("pets[0].color") },
                   "and says which cat it was")
         }
+
+        section("[M11] the gift keys")
+
+        // `birthday` and `dedication` are the two keys the recipient's config is actually
+        // hand-written for, and they were the least-covered keys in the validator. Both
+        // fail the same way if they fail at all: a config that *looks* configured and
+        // silently never says anything, on a day nobody gets to retry.
+
+        let goodBirthday = PetConfig(birthday: "12-25").validated()
+        eq(goodBirthday.config.birthday, "12-25", "a well-formed birthday is kept as written")
+        check(goodBirthday.corrections.isEmpty,
+              "and a birthday that parses is not a correction",
+              detail: "\(goodBirthday.corrections.map(\.field))")
+
+        let badBirthday = PetConfig(birthday: "the 25th").validated()
+        eq(badBirthday.config.birthday, nil,
+           "a birthday that does not parse is dropped rather than kept — a kept one is a "
+           + "config that looks set up and never fires")
+        check(badBirthday.corrections.contains { $0.field == "birthday" },
+              "and dropping it is reported, so the launch log says why nothing happened")
+
+        let goodDedication = PetConfig(dedication: "For you, {name} — every day.").validated()
+        eq(goodDedication.config.dedication, "For you, {name} — every day.",
+           "a dedication that fits is kept exactly, name slot and all")
+        check(goodDedication.corrections.isEmpty,
+              "and is not a correction", detail: "\(goodDedication.corrections.map(\.field))")
+
+        let longDedication = PetConfig(dedication: String(repeating: "b", count: 400)).validated()
+        eq(longDedication.config.dedication?.count, PetConfig.maximumDedicationLength,
+           "an over-long dedication is cut to the limit rather than refused")
+        check(longDedication.corrections.contains { $0.field == "dedication" },
+              "and that truncation is loud, the way the name's is")
     }
 }

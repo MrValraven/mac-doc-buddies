@@ -280,6 +280,15 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
         dismissBubble()
         guard let delegate = delegate else { return }
 
+        // [M11] Recorded here rather than only in `reply(to:)`, so that every line the pet
+        // says is one `--verbose` can name. The meeting between two cats calls straight
+        // into this method, and without this the snapshot printed `talking=true` with no
+        // `saying=` beside it — SPEC §9, on a feature nobody can watch happen.
+        //
+        // Set past the delegate guard, alongside `isTalking`: both mean "a bubble is
+        // actually on screen", and the snapshot only prints the reply while it is.
+        lastReply = text
+
         let scale = delegate.interactionScale
         let view = BubbleView(text: text, scale: scale)
         let window = BubbleWindow(content: view)

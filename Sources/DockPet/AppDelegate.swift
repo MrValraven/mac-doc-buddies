@@ -1085,12 +1085,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         opener.view.facing = .right
         replier.view.facing = .left
 
+        // SPEC §9: the forced state change is invisible to the poll's own state log, which
+        // only prints a transition `advanceBehavior` reported — and this one was imposed
+        // from outside it. Without this line a `--verbose` reader sees two cats stop dead
+        // with nothing saying why, on the one feature nobody can watch happen.
+        logLocation("pet \(opener.index) and pet \(replier.index) meet — both sit")
+
         // SPEC §9: an exchange nobody can see has to be readable in the log.
         print("[meet] pet \(opener.index) → \"\(exchange.opener)\"")
         opener.interaction.showBubble(exchange.opener)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + MeetingCoordinator.replyDelay) {
-            [weak self, weak replier] in
+            [weak self, weak opener, weak replier] in
             // Weak on both, and the pet is confirmed still in the array before it speaks:
             // Settings can rebuild the cast during the second and a half between the line
             // and its answer, and a torn-down cat must not put a bubble back on screen.
@@ -1102,6 +1108,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                   self.pets.contains(where: { $0 === replier }),
                   !replier.interaction.isTalking else { return }
             print("[meet] pet \(replier.index) → \"\(exchange.reply)\"")
+
+            // Take the opener's bubble down before the answer goes up. Nothing else does:
+            // each bubble runs its own reading-time timer, and `BubbleGeometry.frame`
+            // centres a bubble over its own pet's midX. The two cats stand 34–64 pt apart
+            // and a line is around 215 pt wide, so leaving the first up means roughly a
+            // second and a half of two opaque rectangles and two tails overlapping — the
+            // milestone's headline feature reading as a rendering glitch.
+            //
+            // Deliberate trade-off: `dismissBubble()` clears the opener's `isTalking`,
+            // which restarts its behaviour clock (`Pet.advanceBehavior` freezes that clock
+            // while a pet is talking). Acceptable here — the opener was just forced into
+            // `.sit`, which carries a 3–9 s dwell, so it stays sitting through the answer
+            // either way.
+            opener?.interaction.dismissBubble()
             replier.interaction.showBubble(exchange.reply)
         }
 

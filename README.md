@@ -67,6 +67,7 @@ Run the binary directly (`DockPet.app/Contents/MacOS/DockPet`) with:
 | `--render-test` | Renders the pet offscreen and asserts against the pixels; exits non-zero on failure |
 | `--menu-test` | Drives pause/resume in-process and checks the timers and visibility |
 | `--interaction-test` | Clicks the pet in-process, prints the clickable silhouette, and checks every prompt's bubble |
+| `--dedication-test` | Clicks the pet in-process and checks the dedication says itself once a day and then stops |
 | `--shot=PATH` | With `--settings-test` or `--interaction-test`, writes a PNG of what was rendered |
 
 Tests are an executable target rather than XCTest (this machine has Command Line Tools
