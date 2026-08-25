@@ -1057,4 +1057,180 @@ extension AppDelegate {
         print("all \(checks) checks passed")
         exit(0)
     }
+
+    /// [M14] `--cuddle-test`: ask for a nap, follow it to the end, and say what happened.
+    ///
+    /// The nap is twenty seconds of screen, eight of them two cats lying still, which is
+    /// the one sequence in this app that looks identical to a hang. SPEC §9: if it cannot
+    /// be watched, it has to be reported.
+    func runCuddleTest() -> Never {
+        var failures = 0
+        var checks = 0
+        func check(_ passed: Bool, _ what: String, _ detail: @autoclosure () -> String = "") {
+            checks += 1
+            if passed { print("  ok    \(what)") }
+            else { failures += 1; print("  FAIL  \(what)\(detail().isEmpty ? "" : ": \(detail())")") }
+        }
+        /// Run the real run loop, so the real animation timer drives the real nap.
+        func settle(_ seconds: TimeInterval) {
+            RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        }
+        func waitFor(_ phase: CuddleRoutine.Phase?, within limit: TimeInterval) -> Bool {
+            let deadline = Date().addingTimeInterval(limit)
+            while Date() < deadline {
+                if cuddlePhase == phase { return true }
+                settle(0.05)
+            }
+            return cuddlePhase == phase
+        }
+
+        print("CuddleTest")
+
+        let originalConfig = config
+
+        // Two cats, napping on, whatever the real config says. Not persisted: this is a
+        // test run, and it is put back at the end.
+        var testConfig = originalConfig
+        testConfig.cuddles = true
+        if testConfig.pets.count < 2 {
+            let first = testConfig.pets.first ?? PetProfile(name: nil, color: testConfig.color,
+                                                            userName: testConfig.userName)
+            let other = CatPalette.all.first { $0.id != first.color } ?? .default
+            testConfig.pets = [first, PetProfile(name: nil, color: other.id, userName: nil)]
+        }
+        applyConfig(testConfig, persist: false)
+        settle(0.6)   // let the poll place the rebuilt cast
+
+        check(pets.count == 2, "the test has two cats to work with", "got \(pets.count)")
+        guard pets.count == 2 else {
+            print("\n\(failures + 1) of \(checks + 1) checks FAILED")
+            applyConfig(originalConfig, persist: false)
+            exit(1)
+        }
+        guard currentLocation != nil else {
+            // Not a failure of the nap: with no Dock located there is nowhere to walk.
+            print("  SKIP  the Dock is not located (grant Accessibility, or unhide the Dock):"
+                  + " there is nowhere for two cats to sleep")
+            applyConfig(originalConfig, persist: false)
+            exit(1)
+        }
+
+        check(interactionCanCuddle, "with two cats and napping on, the menu item is offered")
+
+        // --- the approach ---------------------------------------------------------------
+        let before = pets.map(\.walker.distance)
+        interactionRequestCuddle()
+        check(cuddlePhase == .approach, "asking for a nap sets both cats walking",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        guard let running = cuddle else {
+            print("\n\(failures + 1) of \(checks + 1) checks FAILED")
+            applyConfig(originalConfig, persist: false)
+            exit(1)
+        }
+        check(!interactionCanCuddle, "and a second ask is refused while that one is under way")
+        check(!interactionCanKiss, "as is a kiss on top of it")
+
+        settle(0.8)
+        let closing = zip(before, pets.map(\.walker.distance)).map { abs($0 - $1) }
+        check(closing.contains { $0 > 0 }, "the cats are moving toward each other",
+              "moved \(closing.map { Self.f($0) })")
+
+        // --- settling -------------------------------------------------------------------
+        check(waitFor(.settle, within: CuddleRoutine.approachCeiling + 1),
+              "they reach each other and settle",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { $0.behavior.state == .sit }, "both cats sit down",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+        check(MeetingCoordinator.haveMet(pets[0].window.frame, pets[1].window.frame),
+              "and they are lying against each other")
+        check(pets.allSatisfy { !$0.interaction.isTalking },
+              "nobody speaks before they have arrived")
+
+        // --- the words ------------------------------------------------------------------
+        check(waitFor(.snuggle, within: CuddleRoutine.settleDuration + 1),
+              "then one of them says something",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        check(running.left.interaction.isTalking, "the left cat is the one that opens")
+        check(running.left.interaction.lastReply == running.opener,
+              "and says the line the nap chose",
+              "got \(running.left.interaction.lastReply ?? "nothing")")
+
+        check(waitFor(.reply, within: CuddleRoutine.snuggleDuration + 1),
+              "then the other one answers",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        check(running.right.interaction.isTalking, "the right cat is the one that answers")
+        check(!running.left.interaction.isTalking,
+              "and the first line came down first: two cats this close have room for one")
+        check(running.right.interaction.lastReply == running.reply,
+              "it says the answer the nap chose",
+              "got \(running.right.interaction.lastReply ?? "nothing")")
+
+        // --- the nap --------------------------------------------------------------------
+        check(waitFor(.sleep, within: CuddleRoutine.replyDuration + 1), "then they fall asleep",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { $0.behavior.state == .sleep }, "both cats are on the sleep pose",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+        check(pets.allSatisfy { !$0.interaction.isTalking },
+              "and nobody talks in their sleep")
+
+        settle(CuddleRoutine.sleepDuration / 2)
+        check(cuddlePhase == .sleep, "the nap is still going half way through it",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { $0.behavior.state == .sleep },
+              "with both cats still asleep, rather than one of them wandering off",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+
+        // --- waking ---------------------------------------------------------------------
+        check(waitFor(.wake, within: CuddleRoutine.sleepDuration + 1), "they wake up",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { $0.behavior.state == .sit },
+              "sitting up before anything is said, rather than talking lying down",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+        check(running.left.interaction.lastReply == running.waking,
+              "and one of them says how it went",
+              "got \(running.left.interaction.lastReply ?? "nothing")")
+
+        // --- parting --------------------------------------------------------------------
+        check(waitFor(.part, within: CuddleRoutine.wakeDuration + 1), "the nap ends",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { !$0.interaction.isTalking },
+              "the last bubble comes down with it")
+        check(pets.allSatisfy { $0.behavior.state == .walk }, "and both cats walk away",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+
+        check(waitFor(nil, within: CuddleRoutine.partDuration + 1),
+              "the routine finishes and hands the pair back to its own behaviour",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+
+        settle(0.5)
+        check(!MeetingCoordinator.haveMet(pets[0].window.frame, pets[1].window.frame),
+              "the two are apart again, so the next tick is not read as a fresh meeting")
+
+        // --- a hand on a sleeping cat ---------------------------------------------------
+        interactionRequestCuddle()
+        check(cuddlePhase != nil, "a second nap can be asked for once the first is over")
+        interactionForcePetState(.sit, for: pets[0].interaction)
+        check(cuddlePhase == nil, "and reaching for either cat ends it rather than being ignored",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { $0.behavior.state != .sleep },
+              "with neither cat left lying on the Dock",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+
+        // --- the toggle -----------------------------------------------------------------
+        var noNapping = testConfig
+        noNapping.cuddles = false
+        applyConfig(noNapping, persist: false)
+        check(!interactionCanCuddle, "with napping switched off, the menu item is gone")
+        interactionRequestCuddle()
+        check(cuddlePhase == nil, "and asking anyway does nothing",
+              "phase \(cuddlePhase.map { $0.rawValue } ?? "none")")
+
+        applyConfig(originalConfig, persist: false)
+        check(config == originalConfig, "the test restored your original settings")
+
+        print("")
+        if failures > 0 { print("\(failures) of \(checks) checks FAILED"); exit(1) }
+        print("all \(checks) checks passed")
+        exit(0)
+    }
 }

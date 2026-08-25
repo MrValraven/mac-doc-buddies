@@ -355,6 +355,45 @@ extension Phrasebook {
     /// a typo.
     public static let loveLine = MeetingLine(opener: "I love you", reply: "And I love youu")
 
+    /// [M14] What the pair says to each other on lying down together.
+    ///
+    /// A pool rather than the kiss's single fixed line: the kiss is a ceremony and says the
+    /// same thing every time, and a nap is an ordinary afternoon that happens more than
+    /// once. No `{name}` in any of it, for the reason `loveLine` has none: it is muttered
+    /// to a cat lying against them, not announced across the Dock.
+    public static let cuddlePairs: [MeetingLine] = [
+        MeetingLine(opener: "Scoot over.",
+                    reply: "Mmmmm."),
+        MeetingLine(opener: "Nap with me?",
+                    reply: "Always."),
+        MeetingLine(opener: "You are warm.",
+                    reply: "Stay close, then."),
+        MeetingLine(opener: "Dodo?",
+                    reply: "Dodo."),
+        MeetingLine(opener: "Just a small one.",
+                    reply: "That is what you said yesterday."),
+        MeetingLine(opener: "Room for two?",
+                    reply: "Room for two."),
+        MeetingLine(opener: "I have been up since the sun.",
+                    reply: "Then lie down and stop being brave."),
+        MeetingLine(opener: "Put your head here.",
+                    reply: "It is already there."),
+    ]
+
+    /// [M14] What the cat that wakes first says about the nap.
+    ///
+    /// One line rather than a pair: the other one is still asleep, and an answer would mean
+    /// a second bubble over two cats who have room for one.
+    public static let cuddleWakingLines: [String] = [
+        "Best nap.",
+        "Five more minutes.",
+        "You snore, you know.",
+        "That was a good one.",
+        "I dreamed about the sunny bit.",
+        "Do not tell anyone I did that.",
+        "Same time tomorrow.",
+    ]
+
     public static let meetingPairs: [MeetingLine] = [
         MeetingLine(opener: "There you are, {name}.",
                     reply: "Here I am. Hello, {name}."),
@@ -364,8 +403,8 @@ extension Phrasebook {
                     reply: "Then we'll share the spot."),
         MeetingLine(opener: "Any plans today, {name}?",
                     reply: "Sitting near you, mostly."),
-        MeetingLine(opener: "I walked all the way from the other end.",
-                    reply: "I know, {name}. I watched the whole way."),
+        MeetingLine(opener: "I walked all the way from the other end just to see you.",
+                    reply: "I watched the whole way, {name}. It's my favourite part of the day."),
         MeetingLine(opener: "Did you know there are two of us now?",
                     reply: "I count us every morning, {name}."),
         MeetingLine(opener: "Race you back, {name}.",

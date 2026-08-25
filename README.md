@@ -69,6 +69,7 @@ Run the binary directly (`DockPet.app/Contents/MacOS/DockPet`) with:
 | `--interaction-test` | Clicks the pet in-process, prints the clickable silhouette, and checks every prompt's bubble |
 | `--dedication-test` | Clicks the pet in-process and checks the dedication says itself once a day and then stops |
 | `--kiss-test` | Sends two cats to each other and checks every phase of the kiss, then restores your settings |
+| `--cuddle-test` | Sends two cats to each other, runs the whole nap, and checks every phase of it, then restores your settings |
 | `--scene-test` | Runs the birthday scene now, whatever the date, and checks every phase of it. Writes neither once-a-day stamp, so rehearsing it does not spend the real one |
 | `--shot=PATH` | With `--settings-test` or `--interaction-test`, writes a PNG of what was rendered |
 
@@ -88,7 +89,7 @@ Written with defaults on first launch to
 ```json
 { "speed": 30, "scale": 2, "screen": null, "menuBarIcon": true, "color": "olive",
   "userName": null, "launchAtLogin": true, "birthday": null, "dedication": null,
-  "kisses": true, "reactions": true }
+  "kisses": true, "cuddles": true, "reactions": true }
 ```
 
 - `speed`: points per second (clamped to `0 < speed <= 500`)
@@ -113,6 +114,9 @@ Written with defaults on first launch to
   instead of the usual one
 - `kisses`: whether two cats may kiss: both the occasional kiss when they meet and the
   **Kiss the other cat** menu item. Defaults to `true`; it governs nothing with one cat
+- `cuddles`: whether two cats may nap against each other: both the occasional nap when they
+  meet and the **Nap together** menu item. Defaults to `true`, and is a separate switch from
+  `kisses` because a nap holds the pair for twenty seconds where a kiss holds them for six
 - `dedication`: one line, said once, on the first click of the day, and not again until the
   date changes. `null` means nothing extra to say. Kept under 120 characters; longer is
   truncated and logged. On the birthday the scene says it instead, and that spends the day's
@@ -138,6 +142,7 @@ Click the cat and a small menu opens next to it:
 | Tell me a fact | A cat fact |
 | Take a nap | Puts the pet to sleep |
 | Kiss the other cat | Only with a second cat, and only while `kisses` is on — see **Two cats** below |
+| Nap together | Only with a second cat, and only while `cuddles` is on |
 | Settings… | Opens the Settings window |
 
 The pet answers in a speech bubble above its head, which takes itself down after a few
@@ -206,6 +211,30 @@ DockPet.app/Contents/MacOS/DockPet --kiss-test
 It builds a second cat if you only have one, runs the kiss through every phase — checking
 the line, the sitting, the hearts and the parting — and puts your settings back before it
 exits. It needs Accessibility, like the pet itself.
+
+### Napping together
+
+The other thing the pair does on its own. Roughly one meeting in eight becomes a nap, and
+**Nap together** in either cat's click menu asks for one at any time.
+
+They walk to the point between them, at their ordinary speed rather than the kiss's run,
+sit down facing each other and say something soft: *"Scoot over."* / *"Mmmmm."* Then both
+fall asleep, against each other, for eight seconds. One of them wakes up with a line about
+it (*"Best nap."*, or *"You snore, you know."*), and they walk away. About twenty seconds
+end to end.
+
+Nothing else takes the cats while they sleep, but you still can: click either one, or hold
+a hand on it, and the nap ends there rather than ignoring you. Set `"cuddles": false`, or
+clear **Let them nap together** in Settings, to switch off both the spontaneous nap and the
+menu item.
+
+```sh
+DockPet.app/Contents/MacOS/DockPet --cuddle-test
+```
+
+Same idea as `--kiss-test`, and for a stronger reason: eight seconds of two cats lying
+perfectly still is the one sequence in this app that looks exactly like a hang, so it
+reports every phase rather than leaving you to guess.
 
 ## Being noticed
 

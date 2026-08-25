@@ -906,6 +906,41 @@ The driving for 13d through 13g lives in `SceneDirector.swift` and `AmbientDirec
 rather than in `AppDelegate`, which was 1933 lines before this milestone. Only stored state
 went there, because a Swift extension cannot hold any.
 
+**M14: the cuddle nap.** Two cats sleep against each other for a while and say three soft
+things about it. The third sequence that takes both cats away from their behaviour machines,
+after the kiss and the scene, and the first one that is mostly *stillness*.
+
+- **`CuddleRoutine` is the kiss's shape, not the kiss's code.** Approach, settle, snuggle,
+  reply, sleep, wake, part. It borrows the four properties both siblings needed (a bounded
+  step, at most one phase per call, a ceiling on the approach, both endings spelled `.done`
+  with the abandoned one flagged) because solving those a third way would mean a third set of
+  bugs. It does not borrow the phase list: half of either feature's phases are inert for the
+  other, and a shared duration table would be half dead weight to each caller.
+- **It walks where the kiss runs.** The pace is the difference the user actually sees, and
+  the kiss's `approachSpeedMultiplier` is deliberately not applied here.
+- **The behaviour clock is held for the whole nap**, through the new `frozen:` parameter on
+  `Pet.advanceBehavior`. Eight seconds asleep is longer than a `sleep` dwell can be relied on
+  to last, and the machine deciding to get up half way would walk one cat out from under a
+  routine that still believes it is running. The existing "frozen while talking" stop is the
+  same idea; this is that stop with a second reason.
+- **The animation timer must not suspend mid-nap.** The pair asleep is the most stationary
+  two cats in this app ever are, so the frame they lie down on is exactly the one §6's
+  stationary rule would stop at, taking the clock that wakes them with it. `cuddle != nil` is
+  now one of the "something to animate" answers, alongside the kiss and the scene.
+- **A hand beats a nap.** `PetActivity.cuddle` sits above `meeting` and below `talking`, and
+  every way the user takes a cat already funnels through `interactionForcePetState`, which is
+  where the nap is cut short. Twenty seconds is far too long for a cat to be deaf to a click,
+  and the pair is put back on its feet rather than left with one cat lying flat.
+- **Its own toggle**, `cuddles`, rather than a second meaning for `kisses`: they are
+  different amounts of the pair's day, and someone happy with a kiss every few minutes may
+  still want their cats awake. The nap is rolled after the kiss and only when it is switched
+  on, so an off feature draws no random numbers and cannot shift what a seed produces.
+- **`--cuddle-test`**, for the strongest version of the reason `--kiss-test` exists: eight
+  seconds of two cats lying perfectly still is the one sequence in this app indistinguishable
+  from a hang.
+
+The driving lives in `CuddleDirector.swift`, beside the other two, for the reason M13 gives.
+
 ## 8. Known traps
 
 1. **Coordinate flipping.** §4b. Write it once, test it, never inline it.

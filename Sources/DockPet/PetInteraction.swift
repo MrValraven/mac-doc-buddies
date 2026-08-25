@@ -49,6 +49,12 @@ protocol PetInteractionDelegate: AnyObject {
     /// which of them was clicked has no bearing on who ends up on the left.
     func interactionRequestKiss()
 
+    /// [M14] Whether *Nap together* belongs in this pet's menu, and how it is asked for.
+    /// Asked per click for the reason `interactionCanKiss` is: every one of the conditions
+    /// behind it can change while the cat sits there.
+    var interactionCanCuddle: Bool { get }
+    func interactionRequestCuddle()
+
     /// Open the Settings window, so the click menu is a complete way to reach the app for
     /// anyone who turned the menu bar icon off.
     func interactionShowSettings()
@@ -241,12 +247,26 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
         // [M12] Only with a second cat to kiss, and only while kissing is switched on. A
         // menu item that answers "there is nobody to kiss" would be a worse answer than not
         // being there — the menu is short enough that its length is information.
-        if delegate?.interactionCanKiss == true {
+        //
+        // [M14] The nap sits under it, in the same block and behind its own condition. Two
+        // separators for two things the pair does together would make the menu look like it
+        // has grown a section; one keeps it reading as the short list it is.
+        let canKiss = delegate?.interactionCanKiss == true
+        let canCuddle = delegate?.interactionCanCuddle == true
+        if canKiss || canCuddle {
             menu.addItem(.separator())
+        }
+        if canKiss {
             let kiss = NSMenuItem(title: "Kiss the other cat", action: #selector(kissChosen),
                                   keyEquivalent: "")
             kiss.target = self
             menu.addItem(kiss)
+        }
+        if canCuddle {
+            let cuddle = NSMenuItem(title: "Nap together", action: #selector(cuddleChosen),
+                                    keyEquivalent: "")
+            cuddle.target = self
+            menu.addItem(cuddle)
         }
 
         menu.addItem(.separator())
@@ -270,6 +290,10 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
 
     @objc private func settingsChosen() {
         delegate?.interactionShowSettings()
+    }
+
+    @objc private func cuddleChosen() {
+        delegate?.interactionRequestCuddle()
     }
 
     @objc private func kissChosen() {

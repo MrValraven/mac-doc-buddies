@@ -69,6 +69,15 @@ public struct PetConfig: Codable, Equatable {
     /// trouble of adding a second cat is not looking for less from them.
     public var kisses: Bool
 
+    /// [M14] Whether two cats may nap against each other: both the one that happens on its
+    /// own when they meet, and the *Nap together* item in the click menu.
+    ///
+    /// One flag for both, for the reason `kisses` gives. Defaults on, and separate from
+    /// `kisses` because they are different amounts of the pair's day: a nap holds them for
+    /// twenty seconds, and someone who is happy with a kiss every few minutes may still
+    /// want their cats awake.
+    public var cuddles: Bool
+
     /// [M13] Whether the cats may remark on the app you have just brought to the front.
     ///
     /// Defaults on, like `kisses`: it is rate limited to about one remark an hour, so on
@@ -91,7 +100,7 @@ public struct PetConfig: Codable, Equatable {
                 menuBarIcon: Bool = true, color: String = CatPalette.default.id,
                 userName: String? = nil, launchAtLogin: Bool = true,
                 pets: [PetProfile] = [], birthday: String? = nil, dedication: String? = nil,
-                kisses: Bool = true, reactions: Bool = true) {
+                kisses: Bool = true, cuddles: Bool = true, reactions: Bool = true) {
         self.speed = speed
         self.scale = scale
         self.screen = screen
@@ -103,6 +112,7 @@ public struct PetConfig: Codable, Equatable {
         self.birthday = birthday
         self.dedication = dedication
         self.kisses = kisses
+        self.cuddles = cuddles
         self.reactions = reactions
     }
 
@@ -123,6 +133,8 @@ public struct PetConfig: Codable, Equatable {
         self.birthday = try c.decodeIfPresent(String.self, forKey: .birthday)
         self.dedication = try c.decodeIfPresent(String.self, forKey: .dedication)
         self.kisses = try c.decodeIfPresent(Bool.self, forKey: .kisses) ?? PetConfig.default.kisses
+        self.cuddles = try c.decodeIfPresent(Bool.self, forKey: .cuddles)
+            ?? PetConfig.default.cuddles
         self.reactions = try c.decodeIfPresent(Bool.self, forKey: .reactions)
             ?? PetConfig.default.reactions
     }

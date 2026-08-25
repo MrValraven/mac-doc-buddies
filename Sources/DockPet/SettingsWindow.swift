@@ -40,6 +40,11 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     /// enabled alongside the second cat's coat popup.
     private let kissCheck = NSButton(checkboxWithTitle: "Let them kiss",
                                      target: nil, action: nil)
+    /// [M14] Whether the two of them may nap against each other. Its own checkbox rather
+    /// than a second meaning for the one above, because they are different amounts of the
+    /// pair's day: a kiss is over in six seconds and a nap holds them for twenty.
+    private let cuddleCheck = NSButton(checkboxWithTitle: "Let them nap together",
+                                       target: nil, action: nil)
     private let scalePopup = NSPopUpButton()
     private let screenPopup = NSPopUpButton()
     private let menuBarCheck = NSButton(checkboxWithTitle: "Show the cat in the menu bar",
@@ -70,8 +75,9 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         self.settingsDelegate = delegate
         // [M11] Taller than M10's 260: the second cat added two rows and a hint, and the
         // grid is pinned to the top with the buttons pinned to the bottom, so the window
-        // has to make the room itself.
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 460, height: 330),
+        // has to make the room itself. [M14] And 26 pt taller again for the napping
+        // checkbox, for the same reason: nothing here shrinks the grid to fit.
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 460, height: 356),
                    styleMask: [.titled, .closable],
                    backing: .buffered,
                    defer: false)
@@ -116,9 +122,11 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         secondColorPopup.action = #selector(controlChanged)
         kissCheck.target = self
         kissCheck.action = #selector(controlChanged)
+        cuddleCheck.target = self
+        cuddleCheck.action = #selector(controlChanged)
         let secondCatHint = Self.hint("Two is the limit. The second cat walks the same Dock, "
-                                      + "and when they meet they stop for a word — and now and "
-                                      + "then, a kiss.")
+                                      + "and when they meet they stop for a word, and now and "
+                                      + "then a kiss or a nap in the sun.")
 
         scalePopup.target = self
         scalePopup.action = #selector(controlChanged)
@@ -149,6 +157,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
             [NSGridCell.emptyContentView, secondCatCheck],
             [Self.label("Its coat:"), secondColorPopup],
             [NSGridCell.emptyContentView, kissCheck],
+            [NSGridCell.emptyContentView, cuddleCheck],
             [NSGridCell.emptyContentView, secondCatHint],
             [Self.label("Size:"), scalePopup],
             [Self.label("Display:"), screenPopup],
@@ -273,6 +282,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         secondCatCheck.state = loadedPets.count > 1 ? .on : .off
         secondColorPopup.isEnabled = secondCatCheck.state == .on
         kissCheck.isEnabled = secondCatCheck.state == .on
+        cuddleCheck.isEnabled = secondCatCheck.state == .on
 
         var scales = Self.offeredScales
         if !scales.contains(config.scale) { scales.append(config.scale); scales.sort() }
@@ -308,6 +318,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         }
 
         kissCheck.state = config.kisses ? .on : .off
+        cuddleCheck.state = config.cuddles ? .on : .off
         menuBarCheck.state = config.menuBarIcon ? .on : .off
         loginCheck.state = config.launchAtLogin ? .on : .off
         nameField.stringValue = config.userName ?? ""
@@ -369,6 +380,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         config.scale = scalePopup.selectedItem?.tag ?? config.scale
         config.screen = screenPopup.selectedItem?.representedObject as? String
         config.kisses = kissCheck.state == .on
+        config.cuddles = cuddleCheck.state == .on
         config.menuBarIcon = menuBarCheck.state == .on
         config.launchAtLogin = loginCheck.state == .on
         config.color = coat
@@ -411,6 +423,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         // and neither is a kissing toggle for a cat with nobody to kiss.
         secondColorPopup.isEnabled = secondCatCheck.state == .on
         kissCheck.isEnabled = secondCatCheck.state == .on
+        cuddleCheck.isEnabled = secondCatCheck.state == .on
         chooseCoatForANewSecondCat()
         settingsDelegate?.settingsDidChange(currentValues())
         // Re-read the cast that actually took effect, so the next edit builds on it rather
@@ -484,7 +497,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     func simulate(speed: Double? = nil, scale: Int? = nil, screen: String?? = nil,
                   menuBarIcon: Bool? = nil, color: String? = nil, userName: String? = nil,
                   launchAtLogin: Bool? = nil, secondCat: Bool? = nil,
-                  secondColor: String? = nil, kisses: Bool? = nil) {
+                  secondColor: String? = nil, kisses: Bool? = nil, cuddles: Bool? = nil) {
         if let userName { nameField.stringValue = userName }
         if let speed { speedSlider.doubleValue = speed }
         if let scale { scalePopup.selectItem(withTag: scale) }
@@ -495,6 +508,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         if let menuBarIcon { menuBarCheck.state = menuBarIcon ? .on : .off }
         if let launchAtLogin { loginCheck.state = launchAtLogin ? .on : .off }
         if let kisses { kissCheck.state = kisses ? .on : .off }
+        if let cuddles { cuddleCheck.state = cuddles ? .on : .off }
         if let color {
             let index = colorPopup.itemArray.firstIndex { ($0.representedObject as? String) == color }
             colorPopup.selectItem(at: index ?? 0)

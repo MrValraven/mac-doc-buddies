@@ -77,6 +77,13 @@ public struct MeetingCoordinator {
         case chat(Exchange)
         /// The pair walks together, announces itself with this line, and kisses.
         case kiss(String)
+        /// [M14] The pair walks together and sleeps against each other for a while.
+        ///
+        /// No payload, where the kiss carries its announcement: a nap says three things
+        /// rather than one, and the routine picks them as it reaches each phase. Handing
+        /// them all over here would mean choosing the waking line twenty seconds before
+        /// anybody wakes up.
+        case cuddle
 
         /// The words traded, or `nil` for a kiss. Lets a caller that only cares about
         /// speech stay written the way it was.
@@ -89,6 +96,12 @@ public struct MeetingCoordinator {
             if case .kiss = self { return true }
             return false
         }
+
+        /// [M14]
+        public var isCuddle: Bool {
+            if case .cuddle = self { return true }
+            return false
+        }
     }
 
     /// [M12] How often a meeting becomes a kiss, when kissing is switched on.
@@ -97,6 +110,14 @@ public struct MeetingCoordinator {
     /// still has an ordinary relationship the rest of the time. The cooldown does the real
     /// rate limiting — at 60 s between meetings this is a kiss every few minutes at most.
     public static let kissChance = 0.2
+
+    /// [M14] How often a meeting becomes a nap instead, when napping is switched on.
+    ///
+    /// Lower than the kiss, and deliberately: a nap holds both cats for twenty seconds
+    /// where a kiss holds them for six, so the same rate would take three times as much of
+    /// the pair's day. Rolled after the kiss, so with both switched on it is a nap about
+    /// one meeting in eight, which at a 60 s cooldown is a couple an hour at most.
+    public static let cuddleChance = 0.15
 
     /// Starts at the cooldown so the first meeting of a session is not swallowed. A pair
     /// of cats that ignore each other for the first minute after launch looks broken.
@@ -145,9 +166,15 @@ public struct MeetingCoordinator {
     /// could not be run four hundred times in a test with the answer switched both ways.
     /// It defaults to off so that a caller which has not thought about kissing gets the
     /// M11 behaviour rather than a surprise.
+    ///
+    /// [M14] `cuddlesAllowed` is the second toggle, and is rolled after the kiss for the
+    /// same reason the kiss is rolled only when it is on: a switched-off feature must draw
+    /// no random numbers at all, or turning it on would silently rewrite which
+    /// conversations every seed produces.
     public mutating func meet(_ a: CGRect, _ b: CGRect,
                               openerName: String?, replierName: String?,
-                              kissesAllowed: Bool = false) -> Encounter? {
+                              kissesAllowed: Bool = false,
+                              cuddlesAllowed: Bool = false) -> Encounter? {
         guard Self.haveMet(a, b), sinceLastMeeting >= Self.cooldown else { return nil }
         sinceLastMeeting = 0
 
@@ -155,6 +182,10 @@ public struct MeetingCoordinator {
         // toggle does not shift which conversations a given seed produces.
         if kissesAllowed, Double.random(in: 0..<1, using: &rng) < Self.kissChance {
             return .kiss(Phrasebook.kissLine)
+        }
+
+        if cuddlesAllowed, Double.random(in: 0..<1, using: &rng) < Self.cuddleChance {
+            return .cuddle
         }
 
         let pairs = Phrasebook.meetingPairs

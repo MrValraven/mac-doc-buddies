@@ -25,7 +25,7 @@ struct LaunchOptions {
     /// dedication (see `PetInteraction.isSelfTest`).
     var isSelfTest: Bool {
         renderTest || settingsTest || menuTest || dockBounds || interactionTest || dedicationTest
-            || kissTest || sceneTest
+            || kissTest || sceneTest || cuddleTest
     }
 
     /// With --settings-test, also render the window to this PNG path. Rendered offscreen
@@ -50,6 +50,10 @@ struct LaunchOptions {
     /// to fix. It never writes the real once-a-day stamp, so rehearsing it does not silence
     /// the real one.
     let sceneTest: Bool
+    /// [M14] Send two cats to each other, run the nap to its end, and exit. Twenty seconds
+    /// of screen, most of it two cats lying still, which is exactly the sequence nobody
+    /// watching would be able to tell from a hang.
+    let cuddleTest: Bool
 
     init(arguments: [String]) {
         self.verbose = arguments.contains("--verbose") || arguments.contains("-v")
@@ -63,6 +67,7 @@ struct LaunchOptions {
         self.dedicationTest = arguments.contains("--dedication-test")
         self.kissTest = arguments.contains("--kiss-test")
         self.sceneTest = arguments.contains("--scene-test")
+        self.cuddleTest = arguments.contains("--cuddle-test")
     }
 }
 
@@ -178,6 +183,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
     /// [M13] The birthday scene in progress, or `nil`, which is every day but one.
     var scene: SceneInProgress?
+
+    /// [M14] The cuddle nap in progress, or `nil`, which is nearly always. One at a time,
+    /// for the reason the kiss is one at a time: the cast is two cats and both are in it.
+    var cuddle: CuddleInProgress?
+
+    /// [M14] Which words a nap uses. Seeded like everything else in this app that rolls
+    /// dice (SPEC §9), and its own generator rather than the meeting's: the pair the nap
+    /// belongs to was decided by that one, and drawing the lines from it too would mean the
+    /// words a nap says depended on how many meetings preceded it.
+    var cuddleRng = SplitMix64(seed: UInt64.random(in: UInt64.min...UInt64.max))
 
     /// [M13] Which Dock tile a cat about to sleep should walk to. Seeded like everything
     /// else in this app that rolls dice (SPEC §9).
@@ -356,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         if options.dedicationTest { runDedicationTest() }
         if options.kissTest { runKissTest() }
         if options.sceneTest { runSceneTest() }
+        if options.cuddleTest { runCuddleTest() }
 
         // [M13] Both are event driven and add no timer of their own (SPEC §6). Started
         // after the self-test modes above, every one of which exits, so a test run never
@@ -882,6 +898,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         check(config.kisses, "and switching it back on returns it", "got \(config.kisses)")
         check(interactionCanKiss, "along with the menu item")
 
+        // [M14] And the napping toggle beside it, which is a separate switch on purpose.
+        window.simulate(cuddles: false)
+        settle(0.2)
+        check(config.cuddles == false, "the napping checkbox reaches the config",
+              "got \(config.cuddles)")
+        check(!interactionCanCuddle,
+              "and takes its menu item away with it, rather than leaving one that does nothing")
+        check(interactionCanKiss, "while leaving kissing alone: two switches, two features")
+        window.simulate(cuddles: true)
+        settle(0.2)
+        check(config.cuddles, "and switching it back on returns it", "got \(config.cuddles)")
+        check(interactionCanCuddle, "along with the menu item")
+
         let droppedWindow = pets.count == 2 ? pets[1].window : nil
         window.simulate(secondCat: false)
         settle(0.2)
@@ -1043,7 +1072,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                 // Advanced here rather than on the animation timer because this timer is
                 // the one that always runs; the animation timer is suspended for three of
                 // the four states.
-                let (previous, state) = pet.advanceBehavior(by: dt)
+                // [M14] `frozen` while the nap holds this cat: eight seconds asleep is
+                // longer than a `sleep` dwell can be relied on to last, and a machine that
+                // decided to get up mid-nap would walk one cat out from under a routine
+                // that still believes it is running.
+                let (previous, state) = pet.advanceBehavior(by: dt, frozen: cuddleHolds(pet))
                 if state != previous {
                     logLocation("pet \(pet.index): \(state.rawValue) on"
                                 + " \(location.screen.localizedName)")
@@ -1122,6 +1155,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // announcement, the confetti and the wish, so the frame they sit down on is the one
         // the timer would otherwise stop at, taking the clock that ends the scene with it.
         if scene != nil { return nil }
+        // [M14] And a nap, most of all. The pair is asleep for eight seconds, which is the
+        // most stationary two cats in this app ever are, so the frame they lie down on is
+        // exactly the one the timer would stop at, taking the clock that wakes them with
+        // it and leaving them asleep on the Dock until the app is relaunched.
+        if cuddle != nil { return nil }
         // [M13] And a cat walking to a tile is in `.sleep`, which is stationary, so the
         // same stop would strand it sliding half way there.
         if pets.contains(where: { $0.napTrip != nil }) { return nil }
@@ -1142,6 +1180,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             if scene != nil {
                 print("[scene] abandoned: the animation stopped (\(reason.rawValue))")
                 releaseScene()
+            }
+            if cuddle != nil {
+                print("[cuddle] abandoned: the animation stopped (\(reason.rawValue))")
+                releaseCuddle()
             }
             for pet in pets where pet.napTrip != nil {
                 endNapTrip(for: pet, reason: "the animation stopped (\(reason.rawValue))")
@@ -1180,6 +1222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // the phase it lands on this frame is what `moves:` below is asked about.
         advanceKiss(by: dt, on: strip)
         advanceScene(by: dt, on: strip)
+        advanceCuddle(by: dt, on: strip)
 
         // [M11] One timer, every pet. SPEC §6: a second cat must not double the app's
         // wakeups — only the work done inside a wakeup.
@@ -1189,7 +1232,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             // crossing the Dock to reach a particular icon must not do.
             let napDriving = advanceNapTrip(for: pet, by: dt, on: strip)
             pet.advanceAnimation(by: dt, on: strip, spriteSet: sprites(for: pet),
-                                 moves: !isSteered(pet) && !isSteeredByScene(pet) && !napDriving,
+                                 moves: !isSteered(pet) && !isSteeredByScene(pet)
+                                     && !isSteeredByCuddle(pet) && !napDriving,
                                  spritePace: spritePace(for: pet))
         }
     }
@@ -1214,6 +1258,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // including the walk away, and the overlap they stand in would otherwise read as a
         // fresh meeting and put a conversation on top of her birthday.
         guard scene == nil else { return }
+        // [M14] And the nap, which holds them longest of the three.
+        guard cuddle == nil else { return }
         let a = pets[0], b = pets[1]
 
         // Neither cat interrupts itself mid-sentence, and a cat being clicked is having a
@@ -1236,14 +1282,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         guard let encounter = meetings.meet(a.window.frame, b.window.frame,
                                             openerName: opener.profile.name,
                                             replierName: replier.profile.name,
-                                            kissesAllowed: config.kisses) else { return }
+                                            kissesAllowed: config.kisses,
+                                            cuddlesAllowed: config.cuddles) else { return }
 
         // [M12] One meeting in five, when kissing is switched on. The pair is handed to the
         // kiss whole — it does its own sitting, facing and parting — so nothing below this
-        // point runs for it.
-        guard case .chat(let exchange) = encounter else {
+        // point runs for it. [M14] And to the nap, on the same terms.
+        let exchange: MeetingCoordinator.Exchange
+        switch encounter {
+        case .kiss:
             beginKiss(opener, replier, reason: "they met")
             return
+        case .cuddle:
+            beginCuddle(opener, replier, reason: "they met")
+            return
+        case .chat(let said):
+            exchange = said
         }
 
         for pet in [a, b] {
@@ -1867,6 +1921,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// *Take a nap* on the second cat naps the second cat.
     func interactionForcePetState(_ state: PetState, for interaction: PetInteraction) {
         guard let pet = pet(for: interaction) else { return }
+        // [M14] Every way the user takes a cat comes through here: a menu reply, and a hand
+        // held on the art. A cat that is napping with the other one is handed over, because
+        // `PetActivity` puts `talking` and `petted` above `cuddle` and because twenty
+        // seconds is far too long for a cat to be deaf to a click.
+        if cuddleHolds(pet) { interruptCuddle(reason: "she reached for pet \(pet.index)") }
         let previous = pet.behavior.state
         pet.behavior.force(state)
         if pet.behavior.state != previous {
@@ -1878,7 +1937,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
     /// [M12] Three conditions, all of which can change between one click and the next.
     var interactionCanKiss: Bool {
-        config.kisses && pets.count == 2 && kiss == nil && scene == nil
+        config.kisses && pets.count == 2 && kiss == nil && scene == nil && cuddle == nil
+    }
+
+    /// [M14] The same three conditions, for the nap.
+    var interactionCanCuddle: Bool {
+        config.cuddles && pets.count == 2 && kiss == nil && scene == nil && cuddle == nil
+    }
+
+    func interactionRequestCuddle() {
+        // Re-checked rather than trusted, for the reason the kiss re-checks: a menu can sit
+        // open while the other cat is dropped from Settings or walks into a kiss.
+        guard interactionCanCuddle else { return }
+        beginCuddle(pets[0], pets[1], reason: "asked for it")
     }
 
     func interactionRequestKiss() {

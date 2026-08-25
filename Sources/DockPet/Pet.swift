@@ -124,12 +124,19 @@ final class Pet {
 
     /// Advance the behaviour clock. Returns both states so the caller can log the change
     /// and swap sheets only when there was one.
+    ///
+    /// [M14] `frozen` is the same stop for a sequence that holds this cat: the cuddle nap
+    /// keeps a pair asleep for eight seconds, which is longer than a dwell can be relied on
+    /// to last, and a machine that decided to get up half way would walk one cat out from
+    /// under a routine that still believes it is running. Written as a parameter rather
+    /// than another thing this type knows about, because `Pet` has no idea what a nap is.
     @discardableResult
-    func advanceBehavior(by dt: TimeInterval) -> (previous: PetState, current: PetState) {
+    func advanceBehavior(by dt: TimeInterval,
+                         frozen: Bool = false) -> (previous: PetState, current: PetState) {
         let previous = behavior.state
         // [M10] The behaviour clock stops while this pet is talking, so it holds the pose
         // it answered in rather than wandering out from under its own sentence.
-        let current = interaction.isTalking ? previous : behavior.advance(by: dt)
+        let current = interaction.isTalking || frozen ? previous : behavior.advance(by: dt)
         return (previous, current)
     }
 

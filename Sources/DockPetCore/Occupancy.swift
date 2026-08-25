@@ -35,6 +35,10 @@ import Foundation
 ///     because a human reaching for a cat outranks the cat's conversation, and because
 ///     that is already what the app does: `considerMeeting` refuses to start while either
 ///     cat is talking, and a click mid-meeting takes the cat.
+///   * `cuddle` is the pair asleep against each other. Above `meeting` because a nap must
+///     not be talked over, and below `talking` because twenty seconds is far too long for a
+///     cat to be deaf to a click. Taken mid-nap, it ends the way a nap ends: bubble down,
+///     both cats up, and they walk on.
 ///   * `talking` and `petted` are the user, directly. Nothing autonomous interrupts them.
 ///   * `kiss` and `scene` are scripted sequences that run to completion. They outrank
 ///     everything because being cut off half way leaves a cat stranded mid-walk with
@@ -46,6 +50,7 @@ public enum PetActivity: Int, Comparable, CaseIterable, Equatable {
     case napSpot
     case reacting
     case meeting
+    case cuddle
     case talking
     case petted
     case kiss
