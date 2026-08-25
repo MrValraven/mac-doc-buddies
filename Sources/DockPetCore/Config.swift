@@ -37,6 +37,11 @@ public struct PetConfig: Codable, Equatable {
     /// back to `nil`; the phrasebook renders every line without a name cleanly.
     public var userName: String?
 
+    /// [M11] Register the app as a login item. Defaults on: a pet that does not survive a
+    /// reboot is gone within the week, and the app is invisible enough that nobody would
+    /// think to relaunch it by hand.
+    public var launchAtLogin: Bool
+
     /// The chosen coat, falling back to the default rather than to nothing. `validated()`
     /// has already replaced an unknown id by the time a config is in use; this fallback is
     /// for the un-validated case, where an invisible cat would be the worse answer.
@@ -49,13 +54,14 @@ public struct PetConfig: Codable, Equatable {
     // tiles; the only variable is whether Accessibility has been granted yet.
     public init(speed: Double = 30, scale: Int = 2, screen: String? = nil,
                 menuBarIcon: Bool = true, color: String = "orange",
-                userName: String? = nil) {
+                userName: String? = nil, launchAtLogin: Bool = true) {
         self.speed = speed
         self.scale = scale
         self.screen = screen
         self.menuBarIcon = menuBarIcon
         self.color = color
         self.userName = userName
+        self.launchAtLogin = launchAtLogin
     }
 
     /// Missing keys fall back to the defaults, so a partial config file is valid and a
@@ -69,6 +75,8 @@ public struct PetConfig: Codable, Equatable {
             ?? PetConfig.default.menuBarIcon
         self.color = try c.decodeIfPresent(String.self, forKey: .color) ?? PetConfig.default.color
         self.userName = try c.decodeIfPresent(String.self, forKey: .userName)
+        self.launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)
+            ?? PetConfig.default.launchAtLogin
     }
 
     /// Longest name that still fits in a speech bubble beside a Dock-sized cat.

@@ -142,6 +142,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         locator.pinnedScreenName = config.screen
         print("  config           : \(ConfigStore.url.path)")
         for note in outcome.notes { print("    \(note)") }
+
+        // [M11] Skipped under any self-test: a test run must not rewrite the user's login
+        // item as a side effect of checking something else.
+        if !options.isSelfTest {
+            if case .failure(let error) = LoginItem.setEnabled(config.launchAtLogin) {
+                print("[config] could not set launch at login (\(error.localizedDescription))")
+            }
+            print("[config] launch at login: \(LoginItem.statusDescription)")
+        }
         print("  speed            : \(Self.f(CGFloat(config.speed))) px/s at \(Int(Self.animationFPS)) fps")
         print("  scale            : \(config.scale)x")
         print("  screen           : \(config.screen ?? "auto (follow the Dock)")")
@@ -1085,6 +1094,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// afterwards and would otherwise rebuild the view twice.
     private func applyConfig(_ newConfig: PetConfig, persist: Bool, rebuildSprites: Bool = true) {
         let previous = config
+        if newConfig.launchAtLogin != config.launchAtLogin {
+            LoginItem.setEnabled(newConfig.launchAtLogin)
+        }
         config = newConfig
 
         walker.speed = CGFloat(config.speed)

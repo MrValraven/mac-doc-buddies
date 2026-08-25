@@ -194,5 +194,19 @@ enum ConfigTests {
         check(StripPolicy.horizontalOnly.allows(.bottom), "horizontalOnly allows bottom")
         check(!StripPolicy.horizontalOnly.allows(.left), "horizontalOnly rejects left")
         check(!StripPolicy.horizontalOnly.allows(.right), "horizontalOnly rejects right")
+
+        section("[M11] launchAtLogin")
+
+        do {
+            let json = Data(#"{"speed": 30}"#.utf8)
+            let parsed = try! JSONDecoder().decode(PetConfig.self, from: json)
+            eq(parsed.launchAtLogin, true, "absent launchAtLogin defaults to true")
+        }
+
+        do {
+            let json = Data(#"{"launchAtLogin": false}"#.utf8)
+            let parsed = try! JSONDecoder().decode(PetConfig.self, from: json)
+            eq(parsed.launchAtLogin, false, "launchAtLogin round-trips false")
+        }
     }
 }

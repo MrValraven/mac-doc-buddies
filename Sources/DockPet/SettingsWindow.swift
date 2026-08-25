@@ -34,6 +34,9 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     private let screenPopup = NSPopUpButton()
     private let menuBarCheck = NSButton(checkboxWithTitle: "Show the cat in the menu bar",
                                         target: nil, action: nil)
+    /// [M11] Register DockPet as a login item, so the pet survives a reboot.
+    private let loginCheck = NSButton(checkboxWithTitle: "Start DockPet when I log in",
+                                      target: nil, action: nil)
     /// [M10] What the pet calls you when you click it and ask it to say hello.
     private let nameField = NSTextField(string: "")
     /// [M9] Confinement is not optional, so there is no control for it — only a line
@@ -104,6 +107,9 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         menuBarCheck.action = #selector(controlChanged)
         let menuBarHint = Self.hint("With this off, DockPet can only be quit with `killall DockPet`.")
 
+        loginCheck.target = self
+        loginCheck.action = #selector(controlChanged)
+
         let grid = NSGridView(views: [
             [Self.label("Walking speed:"), speedRow],
             [NSGridCell.emptyContentView, speedHint],
@@ -115,6 +121,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
             [NSGridCell.emptyContentView, nameHint],
             [NSGridCell.emptyContentView, menuBarCheck],
             [NSGridCell.emptyContentView, menuBarHint],
+            [NSGridCell.emptyContentView, loginCheck],
         ])
         grid.translatesAutoresizingMaskIntoConstraints = false
         grid.column(at: 0).xPlacement = .trailing
@@ -268,6 +275,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         }
 
         menuBarCheck.state = config.menuBarIcon ? .on : .off
+        loginCheck.state = config.launchAtLogin ? .on : .off
         nameField.stringValue = config.userName ?? ""
 
         // No control here: the pet is always confined. This only reports whether the
@@ -288,7 +296,8 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
                       ?? CatPalette.default.id,
                   // Trimming and length are `PetConfig.validated`'s job, so a name typed
                   // here and a name hand-edited into config.json get the same treatment.
-                  userName: nameField.stringValue.isEmpty ? nil : nameField.stringValue)
+                  userName: nameField.stringValue.isEmpty ? nil : nameField.stringValue,
+                  launchAtLogin: loginCheck.state == .on)
     }
 
     // MARK: - Actions
@@ -325,7 +334,8 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     }
 
     func simulate(speed: Double? = nil, scale: Int? = nil, screen: String?? = nil,
-                  menuBarIcon: Bool? = nil, color: String? = nil, userName: String? = nil) {
+                  menuBarIcon: Bool? = nil, color: String? = nil, userName: String? = nil,
+                  launchAtLogin: Bool? = nil) {
         if let userName { nameField.stringValue = userName }
         if let speed { speedSlider.doubleValue = speed }
         if let scale { scalePopup.selectItem(withTag: scale) }
@@ -334,6 +344,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
             screenPopup.selectItem(at: index ?? 0)
         }
         if let menuBarIcon { menuBarCheck.state = menuBarIcon ? .on : .off }
+        if let launchAtLogin { loginCheck.state = launchAtLogin ? .on : .off }
         if let color {
             let index = colorPopup.itemArray.firstIndex { ($0.representedObject as? String) == color }
             colorPopup.selectItem(at: index ?? 0)
