@@ -1,0 +1,270 @@
+//
+//  PetInteraction.swift — clicking the pet: the menu, and the reply.
+//
+//  [M10] Kept out of AppDelegate, which is already the largest file in the project and
+//  owns four timers, the locator and the config. This owns exactly three things: whether
+//  the pet's window is currently taking mouse events, the menu that a click opens, and the
+//  bubble that the chosen prompt answers in.
+//
+//  The two halves that can be checked without a screen live in DockPetCore — Phrasebook
+//  picks the words, BubbleGeometry places the bubble — so what is left here is wiring.
+//
+
+import AppKit
+import DockPetCore
+
+/// What the interaction needs from the app, and what it asks the app to do.
+protocol PetInteractionDelegate: AnyObject {
+    /// What the pet should call the user, or `nil` if it should greet them without a name.
+    var interactionUserName: String? { get }
+    /// Sprite scale, so the bubble's border matches the art's pixel size.
+    var interactionScale: Int { get }
+    /// The screen the pet is on, for keeping the bubble on it.
+    var interactionScreen: NSScreen? { get }
+    /// Put the pet into a state — how "Take a nap" takes effect, and how the pet stops
+    /// walking while it talks.
+    func interactionForcePetState(_ state: PetState)
+    /// Open the Settings window, so the click menu is a complete way to reach the app for
+    /// anyone who turned the menu bar icon off.
+    func interactionShowSettings()
+}
+
+final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
+
+    /// Points between the pet's head and the tail of the bubble.
+    private static let bubbleGap: CGFloat = 4
+
+    weak var delegate: PetInteractionDelegate?
+
+    private weak var window: PetWindow?
+    private weak var view: PetView?
+
+    private var bubbleWindow: BubbleWindow?
+    private var bubbleView: BubbleView?
+    private var bubbleTimer: Timer?
+
+    /// Seeded from the system generator once, so two launches do not open with the same
+    /// hello, while a single run stays reproducible from that seed (SPEC §9).
+    private var phrasebook = Phrasebook(seed: UInt64.random(in: UInt64.min...UInt64.max))
+
+    private var mouseMonitor: Any?
+    private var menuIsOpen = false
+
+    /// True while the pet has something to say. The app holds the behaviour clock still
+    /// for the duration, so the cat does not wander out from under its own sentence.
+    private(set) var isTalking = false
+
+    /// The last thing the pet said, and what was asked. For the status menu and the log —
+    /// SPEC §9 wants the app's state readable without watching the screen.
+    private(set) var lastPrompt: PetPrompt?
+    private(set) var lastReply: String?
+
+    // MARK: - Wiring
+
+    /// Attach to the pet's window and view.
+    ///
+    /// Called again whenever AppDelegate rebuilds the view — a scale or coat change makes
+    /// a new PetView, and an interaction still pointing at the old one would leave the cat
+    /// unclickable with no visible sign of why.
+    func attach(to view: PetView, in window: PetWindow) {
+        self.view = view
+        self.window = window
+        view.clickDelegate = self
+        startMouseTracking()
+        updateClickThrough()
+    }
+
+    /// Keep `ignoresMouseEvents` in step with whether the cursor is over the cat.
+    ///
+    /// There is no per-pixel version of click-through in AppKit: a window either takes
+    /// mouse events in its whole rectangle or none of it. So the rectangle is switched on
+    /// only while the cursor is actually over the art, and the Dock keeps every other
+    /// click — including the ones that land in the transparent corners of the pet's frame.
+    ///
+    /// Two things move: the cursor and the cat. The monitor below covers the first; the
+    /// animation tick calls this for the second.
+    func updateClickThrough() {
+        guard let window = window, let view = view else { return }
+
+        // A menu closes on its own terms; taking events away mid-track would strand it.
+        guard !menuIsOpen else { return }
+
+        let mouse = NSEvent.mouseLocation
+        guard window.isVisible, window.frame.contains(mouse) else {
+            if !window.ignoresMouseEvents { window.ignoresMouseEvents = true }
+            return
+        }
+
+        let local = view.convert(window.convertPoint(fromScreen: mouse), from: nil)
+        let shouldIgnore = !view.isOverSprite(local)
+        if window.ignoresMouseEvents != shouldIgnore {
+            window.ignoresMouseEvents = shouldIgnore
+            // [M10] The cat moves as well as the cursor, so it can walk out from under a
+            // stationary pointer. `mouseExited` covers the pointer leaving the frame; this
+            // covers the frame leaving the pointer, and the transparent margin, where the
+            // window stops taking events and no tracking-area event is coming.
+            if shouldIgnore { NSCursor.arrow.set() }
+        }
+    }
+
+    private func startMouseTracking() {
+        guard mouseMonitor == nil else { return }
+        // Global, because DockPet is an accessory app that is never frontmost — these are
+        // the events that happen in *other* apps, which is all of them. Mouse monitors need
+        // no permission of their own; only keyboard ones do.
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
+            self?.updateClickThrough()
+        }
+    }
+
+    func stopMouseTracking() {
+        if let monitor = mouseMonitor { NSEvent.removeMonitor(monitor) }
+        mouseMonitor = nil
+        window?.ignoresMouseEvents = true
+    }
+
+    // MARK: - The click
+
+    func petView(_ view: PetView, wasClickedAt point: NSPoint) {
+        // A second click while the pet is mid-sentence dismisses it rather than stacking a
+        // menu on top of a bubble.
+        if isTalking { dismissBubble() }
+
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.autoenablesItems = false
+
+        for prompt in PetPrompt.allCases {
+            if prompt == .nap { menu.addItem(.separator()) }
+            let item = NSMenuItem(title: prompt.menuTitle,
+                                  action: #selector(promptChosen(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = prompt.rawValue
+            menu.addItem(item)
+        }
+
+        menu.addItem(.separator())
+        let settings = NSMenuItem(title: "Settings…", action: #selector(settingsChosen),
+                                  keyEquivalent: "")
+        settings.target = self
+        menu.addItem(settings)
+
+        menuIsOpen = true
+        menu.popUp(positioning: nil, at: point, in: view)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        // Deferred: the click that chose an item is still being delivered, and turning the
+        // window click-through here would pull the rug out from under it.
+        DispatchQueue.main.async { [weak self] in
+            self?.menuIsOpen = false
+            self?.updateClickThrough()
+        }
+    }
+
+    @objc private func settingsChosen() {
+        delegate?.interactionShowSettings()
+    }
+
+    @objc private func promptChosen(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let prompt = PetPrompt(rawValue: raw) else { return }
+        say(prompt)
+    }
+
+    /// Answer a prompt: pick the words, stop the pet, and put the bubble up.
+    func say(_ prompt: PetPrompt) {
+        let name = delegate?.interactionUserName
+        let reply = phrasebook.reply(to: prompt, name: name)
+
+        lastPrompt = prompt
+        lastReply = reply
+        print("[pet] \(prompt.rawValue) → \"\(reply)\"")
+
+        // A nap is the one prompt that changes what the pet is doing afterwards. Everything
+        // else parks it in `idle` for the length of the bubble: `idle` is stationary, so
+        // the existing "only walking moves the pet" rule in animationTick does the stopping
+        // without a second switch for it.
+        delegate?.interactionForcePetState(prompt.forcedState ?? .idle)
+
+        showBubble(reply)
+    }
+
+    // MARK: - The bubble
+
+    private func showBubble(_ text: String) {
+        dismissBubble()
+        guard let delegate = delegate else { return }
+
+        let scale = delegate.interactionScale
+        let view = BubbleView(text: text, scale: scale)
+        let window = BubbleWindow(content: view)
+
+        bubbleView = view
+        bubbleWindow = window
+        isTalking = true
+
+        positionBubble()
+
+        // Faded in rather than snapped: at 12 fps the pet's own motion is deliberately
+        // steppy, but a rectangle appearing instantly next to it reads as a glitch.
+        window.alphaValue = 0
+        window.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            window.animator().alphaValue = 1
+        }
+
+        let timer = Timer(timeInterval: BubbleGeometry.readingTime(for: text),
+                          repeats: false) { [weak self] _ in
+            self?.fadeOutBubble()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        bubbleTimer = timer
+    }
+
+    /// Put the bubble where it belongs relative to the pet right now.
+    ///
+    /// Called on every animation tick as well as at show time: the pet is held still while
+    /// it talks, but "held still" depends on the Dock not moving underneath it, and the
+    /// Dock can be resized or hidden mid-sentence.
+    func positionBubble() {
+        guard let bubbleWindow = bubbleWindow, let bubbleView = bubbleView,
+              let petWindow = window, let delegate = delegate else { return }
+
+        let petFrame = petWindow.frame
+        let visible = (delegate.interactionScreen ?? NSScreen.main)?.visibleFrame
+            ?? petFrame.insetBy(dx: -200, dy: -200)
+
+        let frame = BubbleGeometry.frame(size: bubbleView.bounds.size, above: petFrame,
+                                         within: visible, gap: Self.bubbleGap)
+        bubbleWindow.setFrame(frame, display: true)
+        bubbleView.tailCenterX = BubbleGeometry.tailCenterX(in: frame, pointingAt: petFrame)
+    }
+
+    private func fadeOutBubble() {
+        guard let window = bubbleWindow else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.18
+            window.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            // Guarded: another bubble may have been put up during the fade, and tearing
+            // down whatever is current would take the new one with it.
+            if self?.bubbleWindow === window { self?.dismissBubble() }
+        })
+    }
+
+    /// Take the bubble down now. Safe to call when there is none.
+    func dismissBubble() {
+        bubbleTimer?.invalidate()
+        bubbleTimer = nil
+        bubbleWindow?.orderOut(nil)
+        bubbleWindow = nil
+        bubbleView = nil
+        isTalking = false
+    }
+
+    /// The bubble's window frame, or `nil` when the pet is not talking. For the self-test.
+    var bubbleFrame: CGRect? { bubbleWindow?.frame }
+}

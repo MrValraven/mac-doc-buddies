@@ -1,0 +1,76 @@
+# ─── Swift / SwiftPM ──────────────────────────────────────────────────────────
+.build/
+.swiftpm/
+Package.resolved          # app, not a library: pinning adds churn without consumers
+*.o
+*.d
+*.swiftmodule
+*.swiftdoc
+*.swiftsourceinfo
+*.dia
+timeline.json
+
+# ─── Build products ───────────────────────────────────────────────────────────
+# bundle.sh assembles this from scratch on every run (SPEC §2).
+DockPet.app/
+*.app/
+*.dSYM/
+*.dmg
+*.zip
+
+# ─── Generated resources ──────────────────────────────────────────────────────
+# makeicon.swift and makesprite.swift regenerate these; bundle.sh runs them when
+# missing, so they stay out of history rather than landing as binary blobs.
+Resources/AppIcon.icns
+Resources/sprites/
+
+# ─── Signing material ─────────────────────────────────────────────────────────
+# makecert.sh keeps its work in mktemp and the keychain, but never let a stray
+# key or identity get committed.
+*.p12
+*.pem
+*.key
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.keychain
+*.keychain-db
+
+# ─── Xcode (if anyone opens the package in it) ────────────────────────────────
+*.xcodeproj/
+*.xcworkspace/
+!*.xcodeproj/project.pbxproj
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+DerivedData/
+
+# ─── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.DocumentRevisions-V100
+Icon?
+
+# ─── Editors / tooling ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.netrwhist
+
+# ─── Local scratch ────────────────────────────────────────────────────────────
+*.log
+*.tmp
+tmp/
+scratch/
+.env
+.env.local
