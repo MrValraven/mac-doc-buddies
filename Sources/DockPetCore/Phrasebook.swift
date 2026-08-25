@@ -37,7 +37,7 @@ public enum PetPrompt: String, CaseIterable {
 
 /// Picks the pet's words, without repeating itself.
 ///
-/// Deterministic by construction — it takes a `SplitMix64` seed like `BehaviorMachine`
+/// Deterministic by construction. It takes a `SplitMix64` seed like `BehaviorMachine`
 /// does, for the same reason: "it said something plausible when I clicked it" is not a
 /// check (SPEC §9).
 public struct Phrasebook {
@@ -50,17 +50,26 @@ public struct Phrasebook {
     ///
     /// Each pool needs at least two entries, because `reply` promises never to repeat
     /// itself twice running and cannot keep that promise from a pool of one. The lines are
-    /// also written so they read correctly with the name removed — see `render`.
-    public static func lines(for prompt: PetPrompt) -> [String] {
+    /// also written so they read correctly with the name removed; see `render`.
+    ///
+    /// [M13] `date` and `calendar` exist for exactly one pool: `hello`, which is now the
+    /// time-aware one. Both are defaulted, for two reasons. Every existing call site wants
+    /// "now" and compiles untouched. And the only place `Date()` is read is this outermost
+    /// boundary, rather than inside a function a test would then have to work around
+    /// (SPEC §9).
+    ///
+    /// Every other pool ignores both and answers the same thing at any hour. That is what
+    /// keeps the birthday swap in `PetInteraction.say` winning on the day: it hands `reply`
+    /// a `.birthday` prompt, and the clock never reaches that pool.
+    public static func lines(for prompt: PetPrompt,
+                             at date: Date = Date(),
+                             calendar: Calendar = .current) -> [String] {
         switch prompt {
         case .hello:
-            return [
-                "Hello, {name}!",
-                "Oh — hi, {name}.",
-                "There you are, {name}.",
-                "{name}! I was hoping you'd click.",
-                "Hey, {name}. Good to see you.",
-            ]
+            // [M13] Routed rather than listed. The greetings and the reasoning about them
+            // live together below; leaving a second, all-day list here as well is how the
+            // two would drift apart, and only one of them would ever be said.
+            return greetingLines(for: TimeOfDay.at(date, calendar: calendar))
         case .encourage:
             return [
                 "You've got this, {name}.",
@@ -95,6 +104,81 @@ public struct Phrasebook {
                 "Many happy returns, {name}. That's the formal one.",
             ]
         }
+    }
+
+    /// [M13] The greetings that fit at any hour: the original `hello` pool, unchanged.
+    ///
+    /// Kept, rather than replaced by the time-of-day pools, because they are still the
+    /// right thing for a cat to say and because they are what the README quotes. They sit
+    /// in every part of the day's pool, so the pet does not become a clock that only ever
+    /// announces the hour back at you. The time-specific lines are the seasoning, not the
+    /// meal.
+    public static let anytimeGreetings: [String] = [
+        "Hello, {name}!",
+        "Oh, hi, {name}.",
+        "There you are, {name}.",
+        "{name}! I was hoping you'd click.",
+        "Hey, {name}. Good to see you.",
+    ]
+
+    /// [M13] The greetings that only make sense at one part of the day.
+    ///
+    /// Four per part, deliberately few. These are the lines that carry the whole feature,
+    /// so each one has to be worth reading a fifth time; a pool of twenty would be a pool
+    /// of six good lines and fourteen that get skimmed. Four per part also keeps all four
+    /// pools the same size, which matters more than it looks: `reply` draws an index, so
+    /// equal-sized pools make its draw sequence identical whatever the hour, and a test of
+    /// it cannot pass in the morning and fail at night.
+    ///
+    /// Every line obeys the M10 rule that `render` enforces: it must read correctly with
+    /// `{name}` taken out, because being greeted without a name is a supported setting and
+    /// not an error path. That is why none of them opens with the slot followed by its own
+    /// punctuation.
+    ///
+    /// The night lines are the ones to be careful with. A cat that finds you up at 2am
+    /// notices; it does not tell you to go to bed. The difference between "still up?" and
+    /// "you should be asleep" is the difference between company and a smoke alarm.
+    public static func timeGreetings(for time: TimeOfDay) -> [String] {
+        switch time {
+        case .morning:
+            return [
+                "Morning, {name}. The Dock's been quiet without you.",
+                "Good morning, {name}. I've been up for hours. Sitting, mostly.",
+                "You're up, {name}. That makes two of us.",
+                "Morning, {name}. Coffee first. The rest can wait.",
+            ]
+        case .afternoon:
+            return [
+                "Afternoon, {name}. Halfway. That counts for something.",
+                "Good afternoon, {name}. I've inspected the Dock. It's fine.",
+                "Still going, {name}? So am I. Sort of.",
+                "Afternoon, {name}. Stretch. It's the one thing I'm good at.",
+            ]
+        case .evening:
+            return [
+                "Evening, {name}. Whatever today was, it's over now.",
+                "Good evening, {name}. You can put it down.",
+                "You made it, {name}. Evenings are the better half.",
+                "Evening, {name}. Is it dinner yet? Asking for me.",
+            ]
+        case .night:
+            return [
+                "Still up, {name}? Me too. Cats are night people.",
+                "It's late, {name}. I'm not saying anything, I'm just here.",
+                "Oh, you're still here, {name}. Good.",
+                "Night shift, {name}? I'll keep you company.",
+            ]
+        }
+    }
+
+    /// [M13] Everything the pet may say as a greeting at `time`.
+    ///
+    /// The time-specific lines first and the evergreen ones after, though the order is
+    /// cosmetic: `reply` draws uniformly across the whole pool, so the odds are four in
+    /// nine that a greeting mentions the hour and five in nine that it does not. That ratio
+    /// is the feature. Every greeting naming the time of day would wear out inside a week.
+    public static func greetingLines(for time: TimeOfDay) -> [String] {
+        timeGreetings(for: time) + anytimeGreetings
     }
 
     /// [M11] The birthday pool, reachable directly: on the day, it replaces the `hello`
@@ -149,25 +233,40 @@ public struct Phrasebook {
 
     /// The line each prompt used last, so the pet does not say the same thing twice in a
     /// row. Kept per prompt: asking for a fact must not constrain the next hello.
-    private var lastIndex: [PetPrompt: Int] = [:]
+    ///
+    /// [M13] The line itself, not its index. The index was enough while every pool was a
+    /// fixed list, and it stopped being enough when `hello` started depending on the clock:
+    /// a pet left running past 22:00 would compare "index 3 of this evening's greetings"
+    /// against "index 3 of tonight's", which is a different sentence, and so would both
+    /// block a line it never said and allow the one it just did. Storing the template makes
+    /// the comparison mean what it says. For a pool that has not changed, the draw sequence
+    /// is identical to the index version's, so nothing else moves.
+    private var lastLine: [PetPrompt: String] = [:]
 
     public init(seed: UInt64) {
         self.rng = SplitMix64(seed: seed)
     }
 
     /// A line for `prompt`, never the one this prompt used last.
-    public mutating func reply(to prompt: PetPrompt, name: String?) -> String {
-        let pool = Self.lines(for: prompt)
+    ///
+    /// [M13] `at` and `calendar` are passed straight through to `lines(for:at:calendar:)`,
+    /// where only the `hello` pool reads them, and are defaulted here for the same reason
+    /// they are defaulted there: `PetInteraction` asks the question at the moment of the
+    /// click and means "now", while a test says which hour it is asking about (SPEC §9).
+    public mutating func reply(to prompt: PetPrompt, name: String?,
+                               at date: Date = Date(),
+                               calendar: Calendar = .current) -> String {
+        let pool = Self.lines(for: prompt, at: date, calendar: calendar)
         guard !pool.isEmpty else { return "" }
 
         var index = Int.random(in: 0..<pool.count, using: &rng)
-        if pool.count > 1, index == lastIndex[prompt] {
+        if pool.count > 1, pool[index] == lastLine[prompt] {
             // Re-roll across the other lines only, so the replacement is drawn uniformly
             // rather than nudged onto whatever happens to sit next in the pool.
             let offset = Int.random(in: 0..<(pool.count - 1), using: &rng)
             index = (index + 1 + offset) % pool.count
         }
-        lastIndex[prompt] = index
+        lastLine[prompt] = pool[index]
         return Self.render(pool[index], name: name)
     }
 }
