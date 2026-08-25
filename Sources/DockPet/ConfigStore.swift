@@ -38,7 +38,7 @@ enum ConfigStore {
             case .failure(let error):
                 notes.append("could not write a default config (\(error.localizedDescription))")
             }
-            return Outcome(config: .default, notes: notes)
+            return Outcome(config: Self.validatedDefaults, notes: notes)
         }
 
         do {
@@ -52,9 +52,21 @@ enum ConfigStore {
             return Outcome(config: config, notes: notes)
         } catch {
             notes.append("could not read config.json (\(error)) — using defaults")
-            return Outcome(config: .default, notes: notes)
+            return Outcome(config: Self.validatedDefaults, notes: notes)
         }
     }
+
+    /// The defaults, *put through the validator* — because everything downstream is
+    /// written against a validated config.
+    ///
+    /// `PetConfig.default` is a bare initialiser: its `pets` array is empty, and
+    /// `validated()` is what fills it in with pet 0. Handing the bare defaults out on the
+    /// two fallback paths above meant that a Mac with no config.json — every Mac, on its
+    /// first launch — loaded a config describing no cats at all, which the launch sequence
+    /// reads as "no sprite sheets to load" and exits on. The second launch worked, because
+    /// the first one wrote the file before dying. Validated here, at the source, so the
+    /// invariant the rest of the app relies on holds on every path out of `load()`.
+    private static var validatedDefaults: PetConfig { PetConfig.default.validated().config }
 
     @discardableResult
     static func write(_ config: PetConfig) -> Result<Void, Error> {

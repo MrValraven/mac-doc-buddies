@@ -208,10 +208,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // read and nothing else.
         if options.dockBounds { runDockBoundsProbe() }
 
-        // [M11] Every cat this config asks for. `validated()` guarantees this is never
-        // empty, so there is no fallback here — one would hide a validator bug rather than
-        // fix it.
-        let profiles = config.pets
+        // [M11] Every cat this config asks for.
+        //
+        // Through `cast(of:)` rather than `config.pets` directly. `validated()` does fill
+        // the array in, but not every config here has been through it: a hand-built
+        // `PetConfig` has an empty `pets`, and so did `ConfigStore`'s two fallback paths
+        // until they were fixed. An empty cast loads no sprite sheets and the guard below
+        // exits — which is a silent first-launch death on a Mac with no config.json, not a
+        // loud validator bug. One shared normalisation, in the one place that already
+        // existed for it.
+        let profiles = Self.cast(of: config)
 
         // SPEC §5: a missing or malformed walk sheet is fatal and loud, never silently
         // skipped. Optional per-state sheets are not fatal — they degrade to a still pose.
