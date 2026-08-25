@@ -185,42 +185,68 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
     }
 
     /// Answer a prompt: pick the words, stop the pet, and put the bubble up.
+    ///
+    /// [M11] The dedication changes only the *words*. Everything else about a reply — the
+    /// pet stopping, `lastReply`, the `[pet]` log line, and the prompt's own effect — is
+    /// the same on the first click of the day as on the second. An earlier draft returned
+    /// early here, which quietly dropped whatever the user had actually asked for: the
+    /// first *Take a nap* of the day showed the dedication and left the cat wide awake.
     func say(_ prompt: PetPrompt) {
         var prompt = prompt
+        let today = Date()
+        let stamp = Occasion.dayStamp(today)
+
+        // [M11] Is this the first reply of the day, with a dedication to spend it on?
+        //
+        // Decided **before** the birthday swap below, and that order is the whole fix.
+        // Swapping first and then pre-empting the swapped prompt is how the birthday
+        // greeting got eaten on the one morning of the year both features fire: the swap
+        // had already happened, the dedication discarded its result, and the user had to
+        // click a second time to ever see a birthday line. Checked first, the swap has
+        // simply not happened yet — the dedication is said now and the birthday greeting
+        // is still waiting, unspent, on the next click.
+        let dedication: String? = {
+            guard !isSelfTest, let line = delegate?.interactionDedication,
+                  StateStore.lastGreetedDay != stamp else { return nil }
+            return line
+        }()
 
         // [M11] On the day, "Say hello" greets you for the birthday instead. Swapped here
         // rather than in the menu so the menu item keeps its ordinary title all year.
-        let today = Date()
-        if !isSelfTest, prompt == .hello,
+        if dedication == nil, !isSelfTest, prompt == .hello,
            Occasion.isBirthday(today, birthday: delegate?.interactionBirthday) {
             prompt = .birthday
         }
 
-        // [M11] The dedication pre-empts the first reply of the day, whatever was asked.
-        // Once only: `lastGreetedDay` is stamped before the bubble is shown, so a second
-        // click a moment later gets the ordinary reply.
-        let stamp = Occasion.dayStamp(today)
-        if !isSelfTest, let dedication = delegate?.interactionDedication,
-           StateStore.lastGreetedDay != stamp {
-            StateStore.lastGreetedDay = stamp
-            showBubble(Phrasebook.render(dedication, name: delegate?.interactionUserName))
-            return
-        }
-
         let name = delegate?.interactionUserName
-        let reply = phrasebook.reply(to: prompt, name: name)
+        let reply = dedication.map { Phrasebook.render($0, name: name) }
+            ?? phrasebook.reply(to: prompt, name: name)
 
         lastPrompt = prompt
         lastReply = reply
-        print("[pet] \(prompt.rawValue) → \"\(reply)\"")
+        // SPEC §9: the one sentence this feature exists to deliver has to be readable in
+        // the log, because nobody debugging it can see the screen. The prompt is named
+        // alongside it so the line still says what was clicked.
+        print("[pet] \(dedication == nil ? prompt.rawValue : "dedication (\(prompt.rawValue))")"
+              + " → \"\(reply)\"")
 
         // A nap is the one prompt that changes what the pet is doing afterwards. Everything
         // else parks it in `idle` for the length of the bubble: `idle` is stationary, so
         // the existing "only walking moves the pet" rule in animationTick does the stopping
         // without a second switch for it.
+        //
+        // [M11] Applied on the dedication's click too. Every prompt must still do what it
+        // says on the first click of the day — and this is also what stops the cat walking
+        // out from under its own dedication.
         delegate?.interactionForcePetState(prompt.forcedState ?? .idle)
 
         showBubble(reply)
+
+        // [M11] Stamped only once the bubble is genuinely up — `showBubble` returns in
+        // silence when the delegate has gone, and stamping first would spend the day on a
+        // dedication nobody was shown. `isTalking` is set inside `showBubble`, past that
+        // guard, so it is the honest signal for "it was presented".
+        if dedication != nil, isTalking { StateStore.lastGreetedDay = stamp }
     }
 
     // MARK: - The bubble

@@ -94,13 +94,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// `applicationDidFinishLaunching` has built anything.
     var primaryPet: Pet? { pets.first }
 
+    /// The sheets this pet is actually drawn from — its own coat's, never the app's.
+    ///
+    /// Keyed on `profile.palette.id` rather than on `profile.color` so a coat name that
+    /// never went through the validator still resolves to the palette the pet is really
+    /// wearing, instead of missing the dictionary and leaving a cat with no art at all.
+    func sprites(for pet: Pet) -> SpriteSet? { spriteSets[pet.profile.palette.id] }
+
+    /// The sheets in the coat the config itself names — pet 0's.
+    ///
+    /// For the places that mean "the app's art" rather than "this cat's": the sheet
+    /// summary in the status menu, `--settings-test`'s pixel counting, and the window size
+    /// every pet shares. Every set holds the same art in a different colour, so any of
+    /// them answers a question about geometry; only a question about colour needs the
+    /// per-pet accessor above.
+    var spriteSet: SpriteSet? {
+        primaryPet.flatMap(sprites(for:)) ?? spriteSets[config.palette.id]
+    }
+
     var locatorTimer: Timer?
     var animationTimer: Timer?
     private var verboseTimer: Timer?
 
     private var lastPollTime: CFTimeInterval = 0
 
-    var spriteSet: SpriteSet?
+    /// [M11] One recoloured `SpriteSet` per **distinct** coat, keyed by `CatPalette.id`.
+    ///
+    /// Not one set per pet: recolouring is a pass over every pixel of every sheet, so two
+    /// cats wearing the same coat share one set — doing the same swap twice is waste, not
+    /// safety. And not one set for the app either, which is what it was: `profile.color`
+    /// was reported in three places while every pet was handed the single set loaded from
+    /// `config.palette`, so all three would have confidently named a coat the cat was not
+    /// wearing the moment the two colours differed.
+    var spriteSets: [String: SpriteSet] = [:]
+
     var menuBarItem: MenuBarItem?
     private var settingsWindow: SettingsWindow?
     private var saveDebounce: Timer?
@@ -166,17 +193,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // read and nothing else.
         if options.dockBounds { runDockBoundsProbe() }
 
+        // [M11] One profile for now; M11d turns this into `config.pets`.
+        let profiles = [PetProfile(name: nil, color: config.color, userName: config.userName)]
+
         // SPEC §5: a missing or malformed walk sheet is fatal and loud, never silently
         // skipped. Optional per-state sheets are not fatal — they degrade to a still pose.
-        let set: SpriteSet
+        //
+        // [M11] One set per distinct coat in the cast, so each pet is handed art in the
+        // colour its own profile names.
         let spriteNotes: [String]
         do {
-            (set, spriteNotes) = try SpriteLoader.loadSet(palette: config.palette)
+            (spriteSets, spriteNotes) = try loadSpriteSets(for: profiles)
         } catch {
             print("  !! FATAL: could not load sprite sheet — \(error)")
             exit(1)
         }
-        self.spriteSet = set
+        guard let set = spriteSet else {
+            print("  !! FATAL: no sprite sheets were loaded for \(profiles.count) pet(s)")
+            exit(1)
+        }
         let m = set.walk.metadata
         let size = petSizeFor(set: set)
 
@@ -191,36 +226,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             print("    \"\(screen.localizedName)\": \(Self.f(ratio)) device px per art px \(crisp ? "(crisp)" : "!! NOT AN INTEGER — art will shimmer")")
         }
 
-        // [M11] One profile for now; M11d turns this into `config.pets`.
-        let profiles = [PetProfile(name: nil, color: config.color, userName: config.userName)]
-        pets = profiles.enumerated().map { index, profile in
-            let pet = Pet(index: index, profile: profile, spriteSet: set,
-                          size: size, speed: CGFloat(config.speed))
-            // SPEC §5: a sheet that does not slice into the frames it declares is fatal and
-            // loud. Checked per pet, because each one slices the sheet for itself.
-            let sliced = pet.view.sliceCount(for: .walk)
-            if sliced != m.frameCount {
-                print("  !! FATAL: pet \(index) sliced \(sliced) frames but the walk sheet"
-                      + " declares \(m.frameCount)")
-                exit(1)
-            }
-            // [M10] The pet becomes clickable from here on. The window still ignores mouse
-            // events by default; the interaction only switches that on while the cursor is
-            // actually over the cat, so the Dock keeps every other click.
-            pet.interaction.delegate = self
-            // [M11] A self-test must not consume the once-a-day dedication or swap in a
-            // birthday greeting — see PetInteraction.isSelfTest.
-            pet.interaction.isSelfTest = options.isSelfTest
-            pet.interaction.attach(to: pet.view, in: pet.window)
-            pet.applyBehaviorState(pet.behavior.state, spriteSet: set)
-            print("  pet \(index)            : \(pet.profile.name ?? "unnamed"), "
-                  + "\(pet.profile.palette.displayName) coat, \(sliced) walk frames")
-            return pet
-        }
+        buildPets(from: profiles, size: size)
 
         // [M11] After the pets exist, so `--render-test` can address them by index: a test
         // that can only see pet 0 would pass while a second cat is broken.
-        if options.renderTest { runRenderTest(set: set) }
+        if options.renderTest { runRenderTest() }
 
         print("  click menu       : \(PetPrompt.allCases.count) prompts, greeting "
               + (effectiveUserName.map { "\"\($0)\"" } ?? "nobody by name"))
@@ -272,6 +282,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             // window, not this one.
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    // MARK: - [M11] The cast
+
+    /// The coats a cast needs: one entry per **distinct** palette, in first-appearance
+    /// order so the launch log reads the same way twice.
+    ///
+    /// Resolved through `profile.palette` rather than compared on `profile.color`, so two
+    /// cats whose coats are written differently but resolve to the same palette are still
+    /// recognised as one coat.
+    static func distinctPalettes(of profiles: [PetProfile]) -> [CatPalette] {
+        var seen = Set<String>()
+        return profiles.compactMap { seen.insert($0.palette.id).inserted ? $0.palette : nil }
+    }
+
+    /// [M11] One recoloured `SpriteSet` per distinct coat in a cast, keyed by palette id.
+    ///
+    /// Throws rather than exiting, because the two callers want opposite things from a
+    /// failure: SPEC §5 makes a missing sheet fatal at launch, while a reload must keep
+    /// the cat that is already on screen rather than take it away over a cosmetic setting.
+    func loadSpriteSets(for profiles: [PetProfile]) throws -> (sets: [String: SpriteSet],
+                                                               notes: [String]) {
+        var sets: [String: SpriteSet] = [:]
+        var notes: [String] = []
+        let palettes = Self.distinctPalettes(of: profiles)
+        for palette in palettes {
+            let (set, sheetNotes) = try SpriteLoader.loadSet(palette: palette)
+            sets[palette.id] = set
+            // Named only when there is more than one coat to tell apart, so a single cat's
+            // launch log reads exactly as it always has.
+            notes += palettes.count > 1 ? sheetNotes.map { "\(palette.id): \($0)" } : sheetNotes
+        }
+        return (sets, notes)
+    }
+
+    /// Build `pets` from a cast and wire each one up.
+    ///
+    /// Shared by launch and by `rebuildPets(from:)` so that a cat added from Settings is
+    /// put together exactly as one built at launch. Two constructions would drift, and the
+    /// second cat is always the one that ends up with the older half.
+    ///
+    /// `spriteSets` must already hold a set for every coat in `profiles`.
+    func buildPets(from profiles: [PetProfile], size: CGSize) {
+        pets = profiles.enumerated().map { index, profile in
+            guard let set = spriteSets[profile.palette.id] else {
+                // Unreachable via either caller — both load the cast's coats first — but a
+                // pet with no art is an invisible cat with a live mouse monitor, which is
+                // worse to diagnose than a loud exit.
+                print("  !! FATAL: no sheets were loaded for pet \(index)'s"
+                      + " \(profile.palette.id) coat")
+                exit(1)
+            }
+            let pet = Pet(index: index, profile: profile, spriteSet: set,
+                          size: size, speed: CGFloat(config.speed))
+            // SPEC §5: a sheet that does not slice into the frames it declares is fatal and
+            // loud. Checked per pet, because each one slices the sheet for itself.
+            let sliced = pet.view.sliceCount(for: .walk)
+            if sliced != set.walk.metadata.frameCount {
+                print("  !! FATAL: pet \(index) sliced \(sliced) frames but the walk sheet"
+                      + " declares \(set.walk.metadata.frameCount)")
+                exit(1)
+            }
+            // [M10] The pet becomes clickable from here on. The window still ignores mouse
+            // events by default; the interaction only switches that on while the cursor is
+            // actually over the cat, so the Dock keeps every other click.
+            pet.interaction.delegate = self
+            // [M11] A self-test must not consume the once-a-day dedication or swap in a
+            // birthday greeting — see PetInteraction.isSelfTest.
+            pet.interaction.isSelfTest = options.isSelfTest
+            pet.interaction.attach(to: pet.view, in: pet.window)
+            pet.applyBehaviorState(pet.behavior.state, spriteSet: set)
+            print("  pet \(index)            : \(pet.profile.name ?? "unnamed"), "
+                  + "\(pet.profile.palette.displayName) coat, \(sliced) walk frames")
+            return pet
         }
     }
 
@@ -504,10 +589,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         verboseTimer?.invalidate()
         // [M10] A global event monitor outlives the object that installed it; leaving one
         // registered during teardown is a callback into a half-dead app. Every pet has one.
-        for pet in pets {
-            pet.interaction.stopMouseTracking()
-            pet.interaction.dismissBubble()
-        }
+        // [M11] `Pet.teardown()` is the single place a pet is let go, so quitting and
+        // dropping a cat from Settings cannot clean up differently.
+        for pet in pets { pet.teardown() }
     }
 
     // MARK: - Timers
@@ -589,7 +673,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                 if state != previous {
                     logLocation("pet \(pet.index): \(state.rawValue) on"
                                 + " \(location.screen.localizedName)")
-                    pet.applyBehaviorState(state, spriteSet: spriteSet)
+                    pet.applyBehaviorState(state, spriteSet: sprites(for: pet))
                 }
                 // [M10] Also here, not only on the animation tick: that timer is suspended
                 // for three of the four states (SPEC §6), so a sitting or sleeping cat
@@ -631,7 +715,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     func suspensionReason() -> AnimationSuspension? {
         if paused { return .paused }
         if currentLocation == nil { return .dockNotLocated }
-        if pets.allSatisfy({ $0.isStationary(spriteSet: spriteSet) }) { return .stationary }
+        if pets.allSatisfy({ $0.isStationary(spriteSet: sprites(for: $0)) }) { return .stationary }
         if ProcessInfo.processInfo.isLowPowerModeEnabled { return .lowPowerMode }
         return nil
     }
@@ -671,7 +755,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // [M11] One timer, every pet. SPEC §6: a second cat must not double the app's
         // wakeups — only the work done inside a wakeup.
         for pet in pets {
-            pet.advanceAnimation(by: dt, on: strip, spriteSet: spriteSet)
+            pet.advanceAnimation(by: dt, on: strip, spriteSet: sprites(for: pet))
         }
     }
 
@@ -742,7 +826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         if let name = pet.profile.name { line += " (\(name))" }
         line += " coat=\(pet.profile.color)"
         line += " behavior=\(pet.behavior.state.rawValue)"
-        line += " sheet=\((spriteSet?.hasOwnSheet(for: pet.behavior.state) ?? false) ? "own" : "walk-fallback")"
+        line += " sheet=\((sprites(for: pet)?.hasOwnSheet(for: pet.behavior.state) ?? false) ? "own" : "walk-fallback")"
         line += " dwell=\(Self.f(CGFloat(pet.behavior.timeInState)))/\(Self.f(CGFloat(pet.behavior.currentDwell)))s"
         line += " transitions=\(pet.behavior.transitionCount)"
         line += " frame=\(pet.sequencer.index)/\(pet.sequencer.frameCount)"
@@ -845,9 +929,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         applyConfig(outcome.config, persist: false, rebuildSprites: false)
 
         do {
-            let (set, notes) = try SpriteLoader.loadSet(palette: config.palette)
+            // [M11] The cast's coats, not the config's one coat: `applyConfig` above has
+            // already brought every pet's profile up to date, so this is what they wear.
+            let (sets, notes) = try loadSpriteSets(for: pets.map(\.profile))
             for note in notes { print("[reload]   \(note)") }
-            applySprites(set)
+            applySprites(sets)
         } catch {
             print("[reload]   !! sprite reload failed, keeping the current sheets — \(error)")
         }
@@ -855,7 +941,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // Reposition against the live strip straight away rather than waiting out the poll.
         poll()
         print("[reload] done — speed=\(Self.f(CGFloat(config.speed))) scale=\(config.scale)x "
-              + "coat=\(config.color), \(spriteSummary)")
+              + "coats=\(loadedCoatSummary), \(spriteSummary)")
     }
 
     /// Make a config live. The single place any setting takes effect, whether it came from
@@ -876,13 +962,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         for pet in pets { pet.walker.speed = CGFloat(config.speed) }
         locator.pinnedScreenName = config.screen
 
-        if rebuildSprites, config.color != previous.color {
+        // [M11] A pet's identity comes from the config, so a coat or a name changed here
+        // has to reach the pet as well as the file. Three places report `profile.color` —
+        // the launch log, `--verbose` and `--render-test` — and a stale profile would have
+        // all three describing a cat that is not the one on screen.
+        for (index, profile) in Self.cast(of: newConfig).enumerated() where index < pets.count {
+            pets[index].profile = profile
+        }
+
+        // Reload when the cast is no longer wearing the coats that are loaded — a changed
+        // coat, and later a cat added or dropped. Stated as "what is wanted vs what is
+        // loaded" rather than as "did `config.color` change", because with two cats the
+        // second one's coat can change while the config's own coat does not.
+        if rebuildSprites, Set(pets.map(\.profile.palette.id)) != Set(spriteSets.keys) {
             // The recolour happens as the sheets are decoded, so a new coat means reading
-            // them again — re-scaling the set already in memory would only resize the
-            // colour it already has.
+            // them again — re-scaling the sets already in memory would only resize the
+            // colours they already have.
             reloadSprites()
-        } else if rebuildSprites, config.scale != previous.scale, let set = spriteSet {
-            applySprites(set)          // recomputes petSize at the new scale
+        } else if rebuildSprites, config.scale != previous.scale {
+            applySprites(spriteSets)   // recomputes petSize at the new scale
         }
         if config.menuBarIcon != previous.menuBarIcon {
             // Deferred: this can be called from the menu item's own action.
@@ -944,7 +1042,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         let previous = pet.behavior.state
         pet.behavior.force(state)
         if pet.behavior.state != previous {
-            pet.applyBehaviorState(pet.behavior.state, spriteSet: spriteSet)
+            pet.applyBehaviorState(pet.behavior.state, spriteSet: sprites(for: pet))
             logLocation("pet \(pet.index): \(pet.behavior.state.rawValue) (asked for it)")
         }
         updateAnimationState()
@@ -996,20 +1094,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// cosmetic setting.
     private func reloadSprites() {
         do {
-            let (set, _) = try SpriteLoader.loadSet(palette: config.palette)
-            applySprites(set)
-            print("[settings] coat is now \(config.palette.displayName)")
+            let (sets, _) = try loadSpriteSets(for: pets.map(\.profile))
+            applySprites(sets)
+            print("[settings] coats are now \(loadedCoatSummary)")
         } catch {
-            print("[settings] !! could not reload the sheets for the "
-                  + "\(config.palette.displayName) coat, keeping the current one — \(error)")
+            print("[settings] !! could not reload the sheets for \(loadedCoatSummary), "
+                  + "keeping the current ones — \(error)")
         }
     }
 
-    /// Swap in a new sprite set, keeping each pet's current state and heading.
-    private func applySprites(_ set: SpriteSet) {
-        spriteSet = set
-        let size = petSizeFor(set: set)
-        for pet in pets { pet.applySprites(set, size: size) }
+    /// [M11] The coats the cast is wearing, for one line of log.
+    private var loadedCoatSummary: String {
+        let coats = Self.distinctPalettes(of: pets.map(\.profile)).map(\.displayName)
+        return coats.isEmpty ? "no coats" : coats.joined(separator: " + ")
+    }
+
+    /// Swap in a new set of sheets, keeping each pet's current state and heading.
+    ///
+    /// [M11] Each pet is handed the set matching its own coat. Every set is the same art
+    /// in a different colour, so one of them decides the window size for all of them.
+    private func applySprites(_ sets: [String: SpriteSet]) {
+        spriteSets = sets
+        guard let reference = spriteSet else { return }
+        let size = petSizeFor(set: reference)
+        for pet in pets {
+            guard let set = sprites(for: pet) else { continue }
+            pet.applySprites(set, size: size)
+        }
+    }
+
+    /// The cast a config describes: its `pets`, or the legacy flat keys read as pet 0.
+    ///
+    /// `validated()` guarantees `pets` is non-empty and mirrors those keys, so on every
+    /// path a real config takes this is simply `config.pets`. The fallback is for the
+    /// self-tests, which build a `PetConfig` by hand and never pass it through the
+    /// validator: without it `applyConfig` would read a hand-built config as a cast of
+    /// none and stop keeping the pets' identities in step with it.
+    static func cast(of config: PetConfig) -> [PetProfile] {
+        config.pets.isEmpty
+            ? [PetProfile(name: nil, color: config.color, userName: config.userName)]
+            : config.pets
     }
 
     /// The window size for a sheet at the configured scale. Every pet is the same size —

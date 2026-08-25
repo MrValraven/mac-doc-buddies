@@ -23,19 +23,41 @@ extension AppDelegate {
     /// sliced into it. That is what this half is for, and it is indexed: a test that can
     /// only see pet 0 passes while the second cat is broken. Any failure here exits before
     /// `RenderTest.run`, which owns the exit code for everything after it.
-    func runRenderTest(set: SpriteSet) -> Never {
+    func runRenderTest() -> Never {
         print("\npets")
         var failures = 0
+
+        guard let reference = spriteSet else {
+            print("  FAIL no sprite sheets were loaded at all")
+            exit(1)
+        }
+        // The shipped sheet in the colours it is actually drawn in, decoded once and
+        // reused: every pet's coat is checked against it below.
+        let baseBytes = (try? SpriteLoader.load(palette: .base))
+            .flatMap { SpriteRecolor.rgbaBytes(of: $0.image) }
+
         for pet in pets {
+            guard let set = sprites(for: pet) else {
+                failures += 1
+                print("  FAIL pet \(pet.index) coat=\(pet.profile.color)"
+                      + " — no sheets were loaded for that coat")
+                continue
+            }
             let sliced = pet.view.sliceCount(for: .walk)
             let framesOK = sliced == set.walk.metadata.frameCount
             let sizeOK = pet.view.bounds.size == pet.size
             // SPEC §3: the pet's window must never be able to take focus.
             let neverKey = !pet.window.canBecomeKey && !pet.window.canBecomeMain
-            let ok = framesOK && sizeOK && neverKey
+            // [M11] The coat is *asserted*, not merely printed. This line used to report
+            // `profile.color` while every pet was handed the one set loaded from
+            // `config.palette`, and it excluded the coat from its `ok` — so it would have
+            // printed the wrong colour and passed. A third of the safety net for work
+            // whose result is visual cannot be a line that agrees with whatever it is told.
+            let coat = Self.coatEvidence(for: pet, set: set, baseBytes: baseBytes)
+            let ok = framesOK && sizeOK && neverKey && coat.ok
             if !ok { failures += 1 }
             print("  \(ok ? "ok  " : "FAIL") pet \(pet.index)"
-                  + " coat=\(pet.profile.color)"
+                  + " coat=\(pet.profile.color) (\(coat.detail))"
                   + " drawn=\(Self.f(pet.view.bounds.width))x\(Self.f(pet.view.bounds.height))"
                   + "/\(Self.f(pet.size.width))x\(Self.f(pet.size.height)) pt"
                   + " sliced=\(sliced)/\(set.walk.metadata.frameCount) walk frames"
@@ -45,7 +67,55 @@ extension AppDelegate {
             print("\n\(failures) of \(pets.count) pet(s) FAILED")
             exit(1)
         }
-        RenderTest.run(spriteSet: set, scale: config.scale)
+        RenderTest.run(spriteSet: reference, scale: config.scale)
+    }
+
+    /// [M11] Is this pet's art really in the coat its profile names?
+    ///
+    /// Proved from the pixels rather than from the plumbing: the shipped sheet is decoded
+    /// once, put through *this* pet's palette here, and the result compared byte for byte
+    /// with the sheet the pet is actually holding. Two cats handed the same set therefore
+    /// cannot both pass — whichever one is wearing the other's coat fails.
+    ///
+    /// The generated placeholder sheet has no coat colours in it, so there is nothing to
+    /// swap and nothing to assert; that case says so in the log instead of quietly
+    /// claiming a coat it cannot see. The shipped art always has them, and the self-tests
+    /// are run from the bundle.
+    private static func coatEvidence(for pet: Pet, set: SpriteSet,
+                                     baseBytes: [UInt8]?) -> (ok: Bool, detail: String) {
+        let palette = pet.profile.palette
+        guard let baseBytes else {
+            return (false, "the base sheet could not be decoded to compare against")
+        }
+        guard let bytes = SpriteRecolor.rgbaBytes(of: set.walk.image) else {
+            return (false, "its own sheet could not be decoded")
+        }
+
+        var expected = baseBytes
+        palette.recolor(rgba: &expected)
+        guard bytes == expected else {
+            return (false, "its sheet is not the shipped art in the \(palette.id) coat")
+        }
+
+        let inBase = countPixels(CatPalette.base.coat, in: baseBytes)
+        guard inBase > 0 else {
+            return (true, "placeholder art — no coat pixels to swap, so no coat to check")
+        }
+        let worn = countPixels(palette.coat, in: bytes)
+        let leftover = palette.isIdentity ? 0 : countPixels(CatPalette.base.coat, in: bytes)
+        return (worn == inBase && leftover == 0,
+                "\(worn)/\(inBase) px in \(palette.id), \(leftover) px still base")
+    }
+
+    /// Opaque pixels of exactly this colour.
+    private static func countPixels(_ rgb: CatPalette.RGB, in rgba: [UInt8]) -> Int {
+        var found = 0, i = 0
+        while i + 3 < rgba.count {
+            if rgba[i + 3] == 255 && rgba[i] == rgb.red
+                && rgba[i + 1] == rgb.green && rgba[i + 2] == rgb.blue { found += 1 }
+            i += 4
+        }
+        return found
     }
 
     /// Drives the menu bar item's pause/resume path and checks the consequences.
@@ -89,7 +159,11 @@ extension AppDelegate {
         check(!isPaused, "resume takes effect")
         check(statusSummary != "Paused", "status summary stops reporting Paused")
         if wasVisible.contains(true) {
-            for pet in pets where wasVisible[pet.index] {
+            // [M11] Indexed by position in `pets`, not by `pet.index`. The two agree today,
+            // but the invariant is written down nowhere and Settings can now rebuild the
+            // array — and an out-of-range crash inside the safety net is the worst place
+            // for one.
+            for (i, pet) in pets.enumerated() where wasVisible[i] {
                 check(pet.window.isVisible, "pet \(pet.index) comes back after resuming")
             }
             check(animationTimer != nil, "and the animation timer restarts")
@@ -105,13 +179,13 @@ extension AppDelegate {
         let sizesBefore = pets.map { $0.size }
         reload()
         check(spriteSet != nil, "reload leaves a sprite set loaded")
-        for pet in pets {
+        for (i, pet) in pets.enumerated() {
             check(pet.walker.speed == CGFloat(config.speed),
                   "pet \(pet.index): reload re-reads config.json and reapplies speed",
                   "speed is \(pet.walker.speed), config says \(config.speed)")
-            check(pet.size == sizesBefore[pet.index],
+            check(pet.size == sizesBefore[i],
                   "pet \(pet.index): reload keeps the pet size when nothing changed",
-                  "\(sizesBefore[pet.index]) -> \(pet.size)")
+                  "\(sizesBefore[i]) -> \(pet.size)")
             check(pet.window.contentView === pet.view,
                   "pet \(pet.index): the rebuilt view is installed in its own window")
             check(pet.view.sliceCount(for: .walk) > 0,

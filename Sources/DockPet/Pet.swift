@@ -85,6 +85,16 @@ final class Pet {
         interaction.attach(to: rebuilt, in: window)
     }
 
+    /// [M11] Let a pet go. AppKit retains an ordered-in window, so `deinit` never runs for
+    /// a cat that is still on screen — a dropped pet has to be dismissed explicitly or it
+    /// stays on the Dock forever, with a live global mouse monitor behind it.
+    func teardown() {
+        interaction.stopMouseTracking()
+        interaction.dismissBubble()
+        window.orderOut(nil)
+        window.close()
+    }
+
     func position(on strip: WalkStrip) {
         window.setFrame(Geometry.petFrame(size: size, on: strip, distance: walker.distance),
                         display: true)
