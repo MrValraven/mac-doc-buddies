@@ -14,9 +14,18 @@ struct LaunchOptions {
     let renderTest: Bool
     /// Drive the Settings window's controls and exit.
     let settingsTest: Bool
+    /// [M11] Drive the once-a-day dedication's positive path and exit. See
+    /// `AppDelegate.runDedicationTest()` for how it says a real dedication without ever
+    /// touching the real state.json or config.json.
+    let dedicationTest: Bool
+
     /// True for any of the self-test modes. Used to keep a test run from throwing the
-    /// system Accessibility dialog at whoever is running it.
-    var isSelfTest: Bool { renderTest || settingsTest || menuTest || dockBounds || interactionTest }
+    /// system Accessibility dialog at whoever is running it, and — for every mode except
+    /// `--dedication-test` — to keep `PetInteraction.say` from ever consuming a real
+    /// dedication (see `PetInteraction.isSelfTest`).
+    var isSelfTest: Bool {
+        renderTest || settingsTest || menuTest || dockBounds || interactionTest || dedicationTest
+    }
 
     /// With --settings-test, also render the window to this PNG path. Rendered offscreen
     /// rather than screen-captured, which would need a Screen Recording grant (SPEC §4c).
@@ -40,6 +49,7 @@ struct LaunchOptions {
         self.menuTest = arguments.contains("--menu-test")
         self.dockBounds = arguments.contains("--dock-bounds")
         self.interactionTest = arguments.contains("--interaction-test")
+        self.dedicationTest = arguments.contains("--dedication-test")
     }
 }
 
@@ -275,6 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         if options.settingsTest { runSettingsTest() }
         if options.menuTest { runMenuTest() }
         if options.interactionTest { runInteractionTest() }
+        if options.dedicationTest { runDedicationTest() }
 
         // [M11] Skipped under a self-test: a test run must not put a window on screen and
         // wait for a human. Skipped when already granted, which is the normal case for me

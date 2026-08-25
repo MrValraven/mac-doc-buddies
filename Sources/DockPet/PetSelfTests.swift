@@ -14,6 +14,15 @@
 import AppKit
 import DockPetCore
 
+/// [M11] Mirrors the private `State` type in StateStore.swift, so `--dedication-test` can
+/// decode the scratch state.json straight off disk — independent proof that the stamp was
+/// actually written, not merely that `StateStore.lastGreetedDay`'s own read agrees with its
+/// own write. Declared at file scope rather than nested inside the test function: a local
+/// nested Codable type inside a function that ends by calling `exit` confuses the compiler's
+/// reachability analysis into (wrongly) flagging that function's own final `if failures > 0`
+/// as dead code.
+private struct DedicationTestRawState: Codable { var lastGreetedDay: String? }
+
 extension AppDelegate {
 
     /// `--render-test`: the per-pet half first, then `RenderTest`'s pixel checks.
@@ -505,6 +514,202 @@ extension AppDelegate {
             }
             primary.interaction.dismissBubble()
         }
+
+        print("")
+        if failures > 0 { print("\(failures) of \(checks) checks FAILED"); exit(1) }
+        print("all \(checks) checks passed")
+        exit(0)
+    }
+
+    /// [M11] `--dedication-test`: drives the once-a-day dedication's positive path.
+    ///
+    /// This is the feature M11 exists to deliver — one line the owner writes into
+    /// config.json, said on the first click of each day — and until this mode existed it
+    /// had zero coverage of ever actually being said. `--settings-test` covers its
+    /// *persistence* (does moving a slider erase it); this covers the other direction: is
+    /// it ever spoken, does the second click of the day get an ordinary reply instead, does
+    /// `StateStore.lastGreetedDay` round-trip through state.json, does a new day make it
+    /// available again, and does the clicked prompt's own effect — the thing an earlier bug
+    /// lost — still happen on the dedication's own click.
+    ///
+    /// Two guardrails keep this from ever touching anything real:
+    ///  - `StateStore.directoryOverride` is pointed at a fresh temporary directory before a
+    ///    single dedication is said, and set back to `nil` — checked, not merely hoped —
+    ///    before this function's final checks. Not a `defer`: every check here can only
+    ///    fail by incrementing `failures` and continuing, never by leaving the function
+    ///    early, and this function (like every other self-test mode) ends by calling
+    ///    `exit`, which tears the process down without running Swift's deferred cleanup.
+    ///    The real ~/Library/Application Support/DockPet/state.json is never opened.
+    ///  - `config` is mutated in memory only, through `applyConfig(_, persist: false)` (as
+    ///    the other self-tests already do), and restored the same way before the final
+    ///    checks. config.json on disk is never written.
+    ///
+    /// The `isSelfTest` guard in `PetInteraction.say` stays in force for
+    /// `--render-test`, `--menu-test`, `--interaction-test` and `--settings-test`: each of
+    /// those builds its pets with `isSelfTest == true` and `isDedicationTest == false`,
+    /// which `say` still refuses to say a dedication under. Only the one pet driven here
+    /// gets `isDedicationTest = true`, and only for the lifetime of this function.
+    func runDedicationTest() -> Never {
+        var failures = 0
+        var checks = 0
+        func check(_ passed: Bool, _ what: String, _ detail: @autoclosure () -> String = "") {
+            checks += 1
+            if passed { print("  ok    \(what)") }
+            else { failures += 1; print("  FAIL  \(what)\(detail().isEmpty ? "" : " — \(detail())")") }
+        }
+        func settle(_ seconds: TimeInterval) {
+            RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        }
+        /// Independent of `StateStore`: decodes the scratch state.json straight off disk,
+        /// the same way `--settings-test` reads config.json back rather than trusting the
+        /// in-memory value that wrote it.
+        func rawStamp(in directory: URL) -> String? {
+            let data = try? Data(contentsOf: directory.appendingPathComponent("state.json"))
+            let state = data.flatMap { try? JSONDecoder().decode(DedicationTestRawState.self, from: $0) }
+            return state?.lastGreetedDay
+        }
+
+        print("DedicationTest")
+
+        guard let primary = primaryPet else {
+            print("  FAIL  at least one pet was built")
+            exit(1)
+        }
+
+        // Snapshotted before anything else runs, so the very last checks below are a
+        // byte-for-byte comparison against what was actually on disk beforehand — not an
+        // assumption that memory-only config edits and a redirected StateStore add up to
+        // "untouched".
+        let realStateURL = ConfigStore.directory.appendingPathComponent("state.json")
+        let realConfigBefore = try? Data(contentsOf: ConfigStore.url)
+        let realStateBefore = try? Data(contentsOf: realStateURL)
+
+        // --- the two guardrails: a scratch state.json, and a memory-only config --------
+        //
+        // Restored explicitly near the end, and checked, rather than via `defer`: this
+        // function always ends by calling `exit`, like every other self-test mode, and
+        // `exit` tears the process down without running Swift's deferred cleanup — a
+        // `defer` here would read as a restore that in fact never fires.
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DockPetDedicationTest-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        StateStore.directoryOverride = scratch
+
+        let originalConfig = config
+        primary.interaction.isDedicationTest = true
+
+        let marker = "[[DEDICATION]]"
+        var dedicated = config
+        dedicated.dedication = "For you, {name}, today and every day. \(marker)"
+        // Kept out of the birthday path deliberately, so this test cannot become
+        // calendar-dependent: on the one day of the year `Occasion.isBirthday` is true,
+        // `.hello` would be swapped for `.birthday` *after* a dedication is spent, which is
+        // a real behaviour but not the one this mode exists to check.
+        dedicated.birthday = nil
+        dedicated.userName = "Dedicatee"
+        for index in dedicated.pets.indices { dedicated.pets[index].userName = "Dedicatee" }
+        applyConfig(dedicated, persist: false)
+
+        let today = Date()
+        let todayStamp = Occasion.dayStamp(today)
+
+        // --- a fresh store has nothing to gate on --------------------------------------
+        check(StateStore.lastGreetedDay == nil,
+              "the scratch state.json starts with no stamp",
+              "got \(StateStore.lastGreetedDay ?? "nil")")
+
+        // --- first click of the day: the dedication, AND the clicked prompt's own effect
+        //
+        // Driven with .nap rather than .hello so this proves the exact thing the earlier
+        // bug got wrong: the dedication swapping in the words must not swallow "Take a
+        // nap"'s own effect on the pet.
+        primary.interaction.dismissBubble()
+        primary.interaction.say(.nap)
+        settle(0.25)
+        let firstReply = primary.interaction.lastReply
+        check(firstReply?.contains(marker) == true,
+              "the first reply of the day is the dedication",
+              "got \"\(firstReply ?? "nil")\"")
+        check(firstReply?.contains("{name}") == false,
+              "and {name} was rendered, not left in the bubble",
+              "got \"\(firstReply ?? "nil")\"")
+        check(firstReply?.contains("Dedicatee") == true,
+              "rendered specifically with this cat's name",
+              "got \"\(firstReply ?? "nil")\"")
+        check(primary.behavior.state == .sleep,
+              "\"Take a nap\", clicked on the dedication's own turn, still puts the pet to "
+              + "sleep — this is the bug where the dedication used to swallow the prompt",
+              "state is \(primary.behavior.state.rawValue)")
+
+        // --- state.json now holds today's stamp, and Occasion.dayStamp agrees ----------
+        check(StateStore.lastGreetedDay == todayStamp,
+              "state.json holds today's stamp",
+              "got \(StateStore.lastGreetedDay ?? "nil"), expected \(todayStamp)")
+        let onDisk = rawStamp(in: scratch)
+        check(onDisk == todayStamp,
+              "and the stamp is genuinely on disk, decoded independently of StateStore",
+              "file says \(onDisk ?? "nil"), expected \(todayStamp)")
+
+        // --- second click, same day: an ordinary reply, not the dedication -------------
+        primary.interaction.dismissBubble()
+        primary.interaction.say(.hello)
+        settle(0.25)
+        let secondReply = primary.interaction.lastReply
+        check(secondReply?.contains(marker) == false,
+              "the second click of the same day is not the dedication",
+              "got \"\(secondReply ?? "nil")\"")
+        check(StateStore.lastGreetedDay == todayStamp,
+              "and the stamp is unchanged by an ordinary reply",
+              "got \(StateStore.lastGreetedDay ?? "nil")")
+
+        // --- a new day makes it available again -----------------------------------------
+        StateStore.lastGreetedDay = "2000-01-01"
+        primary.interaction.dismissBubble()
+        primary.interaction.say(.hello)
+        settle(0.25)
+        let newDayReply = primary.interaction.lastReply
+        check(newDayReply?.contains(marker) == true,
+              "a different stamp already in the store makes the dedication available again",
+              "got \"\(newDayReply ?? "nil")\"")
+        check(StateStore.lastGreetedDay == todayStamp,
+              "and re-stamps to today, not to whatever the old stamp was",
+              "got \(StateStore.lastGreetedDay ?? "nil")")
+
+        // --- with no dedication configured, an ordinary reply, and nothing is stamped --
+        StateStore.lastGreetedDay = nil
+        var undedicated = dedicated
+        undedicated.dedication = nil
+        applyConfig(undedicated, persist: false)
+        primary.interaction.dismissBubble()
+        primary.interaction.say(.hello)
+        settle(0.25)
+        let noDedicationReply = primary.interaction.lastReply
+        check(noDedicationReply?.contains(marker) == false,
+              "with dedication nil, the ordinary reply comes back",
+              "got \"\(noDedicationReply ?? "nil")\"")
+        check(StateStore.lastGreetedDay == nil,
+              "and nothing is stamped, since nothing was said on the day's behalf",
+              "got \(StateStore.lastGreetedDay ?? "nil")")
+
+        primary.interaction.dismissBubble()
+
+        // --- restore both guardrails before checking anything about the real files -----
+        applyConfig(originalConfig, persist: false)
+        check(config == originalConfig, "the test restored your original settings")
+        primary.interaction.isDedicationTest = false
+        check(!primary.interaction.isDedicationTest,
+              "and this pet is no longer exempt from the dedication guard")
+        StateStore.directoryOverride = nil
+        check(StateStore.directoryOverride == nil,
+              "and state.json points back at the real directory")
+
+        // --- neither guardrail leaked into the real files -------------------------------
+        check((try? Data(contentsOf: ConfigStore.url)) == realConfigBefore,
+              "the real config.json is byte-for-byte unchanged",
+              "\(ConfigStore.url.path)")
+        check((try? Data(contentsOf: realStateURL)) == realStateBefore,
+              "the real state.json is byte-for-byte unchanged",
+              "\(realStateURL.path)")
 
         print("")
         if failures > 0 { print("\(failures) of \(checks) checks FAILED"); exit(1) }

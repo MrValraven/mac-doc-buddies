@@ -68,6 +68,15 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
     /// cause.
     var isSelfTest = false
 
+    /// [M11] True on exactly the one pet `--dedication-test` drives, and only for the
+    /// duration of that test. `isSelfTest` above stays `true` for that mode too — it still
+    /// wants the Accessibility prompt and the login-item write skipped — so this is the
+    /// narrow, separate switch that lifts the dedication guard in `say(_:)` for that one
+    /// pet without touching what `isSelfTest` means for `--render-test`, `--menu-test`,
+    /// `--interaction-test` or `--settings-test`: those four keep `isDedicationTest`
+    /// `false`, so `isSelfTest` alone still blocks them from ever consuming a dedication.
+    var isDedicationTest = false
+
     /// True while the pet has something to say. The app holds the behaviour clock still
     /// for the duration, so the cat does not wander out from under its own sentence.
     private(set) var isTalking = false
@@ -215,7 +224,10 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
         // simply not happened yet — the dedication is said now and the birthday greeting
         // is still waiting, unspent, on the next click.
         let dedication: String? = {
-            guard !isSelfTest, let line = delegate?.interactionDedication,
+            // [M11] `isDedicationTest` is the one deliberate, narrow exception: it is only
+            // ever true on the single pet `--dedication-test` drives, so this still reads
+            // as "never under self-test" for the other four modes.
+            guard (!isSelfTest || isDedicationTest), let line = delegate?.interactionDedication,
                   StateStore.lastGreetedDay != stamp else { return nil }
             return line
         }()

@@ -10,8 +10,19 @@ import Foundation
 
 enum StateStore {
 
+    /// [M11] Escape hatch for `--dedication-test`: with this set, `url` below is built from
+    /// it instead of from `ConfigStore.directory`. That test mode has to say a real
+    /// dedication to prove the positive path works at all, and the once-a-day gate lives
+    /// entirely in this file's state.json — so without a way to redirect it, the only place
+    /// left to write that stamp would be the user's real
+    /// ~/Library/Application Support/DockPet/state.json. `nil` (the default) leaves every
+    /// other launch mode pointed at the real file, exactly as before this existed.
+    static var directoryOverride: URL?
+
+    private static var directory: URL { directoryOverride ?? ConfigStore.directory }
+
     private static var url: URL {
-        ConfigStore.directory.appendingPathComponent("state.json")
+        directory.appendingPathComponent("state.json")
     }
 
     private struct State: Codable {
@@ -36,7 +47,7 @@ enum StateStore {
             var state = read()
             state.lastGreetedDay = newValue
             guard let data = try? JSONEncoder().encode(state) else { return }
-            try? FileManager.default.createDirectory(at: ConfigStore.directory,
+            try? FileManager.default.createDirectory(at: directory,
                                                      withIntermediateDirectories: true)
             try? data.write(to: url)
         }
