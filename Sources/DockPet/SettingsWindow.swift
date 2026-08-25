@@ -30,6 +30,11 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     private let speedSlider = NSSlider()
     private let speedValue = NSTextField(labelWithString: "")
     private let colorPopup = NSPopUpButton()
+    /// [M11] The second cat: whether there is one, and what it wears. The cap is two
+    /// (SPEC §8.5 forbids a plugin system), so this is a checkbox rather than a list.
+    private let secondCatCheck = NSButton(checkboxWithTitle: "A second cat",
+                                          target: nil, action: nil)
+    private let secondColorPopup = NSPopUpButton()
     private let scalePopup = NSPopUpButton()
     private let screenPopup = NSPopUpButton()
     private let menuBarCheck = NSButton(checkboxWithTitle: "Show the cat in the menu bar",
@@ -43,13 +48,25 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     /// saying whether Accessibility has been granted yet.
     private let confineHint = SettingsWindow.hint("")
 
+    /// [M11] The cast exactly as it was last loaded from the config.
+    ///
+    /// This window owns two things about a cat: whether the second one exists, and what
+    /// coat each wears. It does **not** own a cat's `name`, or a per-pet `userName` — both
+    /// are hand-edited in config.json — so the profiles are carried through rather than
+    /// rebuilt from the controls. Rebuilding them would silently delete a cat's name the
+    /// first time anybody nudged the speed slider.
+    private var loadedPets: [PetProfile] = []
+
     /// Scales offered in the popup. config.json accepts 1...8 for hand-editing; anything
     /// outside this list is added on the fly so the UI never silently changes it.
     private static let offeredScales = [1, 2, 3, 4]
 
     init(delegate: SettingsWindowDelegate) {
         self.settingsDelegate = delegate
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 460, height: 260),
+        // [M11] Taller than M10's 260: the second cat added two rows and a hint, and the
+        // grid is pinned to the top with the buttons pinned to the bottom, so the window
+        // has to make the room itself.
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 460, height: 330),
                    styleMask: [.titled, .closable],
                    backing: .buffered,
                    defer: false)
@@ -88,6 +105,13 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         colorPopup.target = self
         colorPopup.action = #selector(controlChanged)
 
+        secondCatCheck.target = self
+        secondCatCheck.action = #selector(controlChanged)
+        secondColorPopup.target = self
+        secondColorPopup.action = #selector(controlChanged)
+        let secondCatHint = Self.hint("Two is the limit. The second cat walks the same Dock, "
+                                      + "and when they meet they stop for a word.")
+
         scalePopup.target = self
         scalePopup.action = #selector(controlChanged)
 
@@ -114,6 +138,9 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
             [Self.label("Walking speed:"), speedRow],
             [NSGridCell.emptyContentView, speedHint],
             [Self.label("Coat:"), colorPopup],
+            [NSGridCell.emptyContentView, secondCatCheck],
+            [Self.label("Its coat:"), secondColorPopup],
+            [NSGridCell.emptyContentView, secondCatHint],
             [Self.label("Size:"), scalePopup],
             [Self.label("Display:"), screenPopup],
             [Self.label("Walk area:"), confineHint],
@@ -131,7 +158,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         // for the hint views themselves rather than by index: a hardcoded index is an
         // out-of-range crash the first time somebody inserts a row above it, and this
         // layout has now been added to twice.
-        let hints: [NSView] = [speedHint, nameHint, menuBarHint]
+        let hints: [NSView] = [speedHint, nameHint, menuBarHint, secondCatHint]
         for row in 0..<grid.numberOfRows {
             let cells = (0..<grid.numberOfColumns).map { grid.cell(atColumnIndex: $0, rowIndex: row).contentView }
             if cells.contains(where: { view in hints.contains { $0 === view } }) {
@@ -229,17 +256,13 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         speedSlider.doubleValue = config.speed
         updateSpeedLabel()
 
-        colorPopup.removeAllItems()
-        for palette in CatPalette.all {
-            colorPopup.addItem(withTitle: palette.displayName)
-            colorPopup.lastItem?.representedObject = palette.id
-            colorPopup.lastItem?.image = Self.swatch(for: palette)
-        }
-        // An id the popup does not offer can only come from a hand-edited config.json, and
-        // validation has already replaced it by now — but selecting nothing would show the
-        // first coat while the pet wore another, so fall back explicitly.
-        let coatIndex = colorPopup.itemArray.firstIndex { ($0.representedObject as? String) == config.color }
-        colorPopup.selectItem(at: coatIndex ?? 0)
+        // [M11] Both coat popups are filled the same way, from the same catalogue: two
+        // lists built separately would be the kind of thing that drifts by one coat.
+        loadedPets = config.pets
+        Self.fillCoats(colorPopup, selecting: config.color)
+        Self.fillCoats(secondColorPopup, selecting: loadedPets.count > 1 ? loadedPets[1].color : nil)
+        secondCatCheck.state = loadedPets.count > 1 ? .on : .off
+        secondColorPopup.isEnabled = secondCatCheck.state == .on
 
         var scales = Self.offeredScales
         if !scales.contains(config.scale) { scales.append(config.scale); scales.sort() }
@@ -288,22 +311,74 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     }
 
     private func currentValues() -> PetConfig {
-        PetConfig(speed: speedSlider.doubleValue.rounded(),
-                  scale: scalePopup.selectedItem?.tag ?? 2,
-                  screen: screenPopup.selectedItem?.representedObject as? String,
-                  menuBarIcon: menuBarCheck.state == .on,
-                  color: colorPopup.selectedItem?.representedObject as? String
-                      ?? CatPalette.default.id,
-                  // Trimming and length are `PetConfig.validated`'s job, so a name typed
-                  // here and a name hand-edited into config.json get the same treatment.
-                  userName: nameField.stringValue.isEmpty ? nil : nameField.stringValue,
-                  launchAtLogin: loginCheck.state == .on)
+        let coat = colorPopup.selectedItem?.representedObject as? String ?? CatPalette.default.id
+        // Trimming and length are `PetConfig.validated`'s job, so a name typed here and a
+        // name hand-edited into config.json get the same treatment.
+        let userName = nameField.stringValue.isEmpty ? nil : nameField.stringValue
+
+        // [M11] Edited in place rather than rebuilt, so a cat's own `name` — which has no
+        // control in this window — survives every other setting being changed.
+        var pets = loadedPets.isEmpty ? [PetProfile()] : loadedPets
+        pets[0].color = coat
+        pets[0].userName = userName
+
+        if secondCatCheck.state == .on {
+            let second = secondColorPopup.selectedItem?.representedObject as? String
+                ?? Self.coatUnlike(coat)
+            if pets.count > 1 {
+                pets[1].color = second
+            } else {
+                // A new second cat has no `userName` of its own on purpose: `nil` means it
+                // inherits whatever *Call me* currently says, where a copy taken now would
+                // quietly go stale the next time that field changed.
+                pets.append(PetProfile(name: nil, color: second, userName: nil))
+            }
+        } else if pets.count > 1 {
+            pets.removeSubrange(1...)
+        }
+
+        return PetConfig(speed: speedSlider.doubleValue.rounded(),
+                         scale: scalePopup.selectedItem?.tag ?? 2,
+                         screen: screenPopup.selectedItem?.representedObject as? String,
+                         menuBarIcon: menuBarCheck.state == .on,
+                         color: coat,
+                         userName: userName,
+                         launchAtLogin: loginCheck.state == .on,
+                         pets: pets)
+    }
+
+    /// Fill a coat popup from the catalogue and select an id.
+    ///
+    /// An id the popup does not offer can only come from a hand-edited config.json, and
+    /// validation has already replaced it by now — but selecting nothing would show the
+    /// first coat while the cat wore another, so fall back explicitly.
+    private static func fillCoats(_ popup: NSPopUpButton, selecting id: String?) {
+        popup.removeAllItems()
+        for palette in CatPalette.all {
+            popup.addItem(withTitle: palette.displayName)
+            popup.lastItem?.representedObject = palette.id
+            popup.lastItem?.image = swatch(for: palette)
+        }
+        let index = popup.itemArray.firstIndex { ($0.representedObject as? String) == id }
+        popup.selectItem(at: index ?? 0)
+    }
+
+    /// A coat the first cat is not wearing, so a newly added second cat is visibly a
+    /// second cat.
+    ///
+    /// Taken from the catalogue rather than named here. `CatPalette.all` leads with the
+    /// default coat, so the second cat gets the default unless the first one is already
+    /// wearing it — and nothing in this file has to be edited when the default changes.
+    private static func coatUnlike(_ taken: String) -> String {
+        CatPalette.all.first { $0.id != taken }?.id ?? CatPalette.default.id
     }
 
     // MARK: - Actions
 
     @objc private func controlChanged() {
         updateSpeedLabel()
+        // A coat popup for a cat that does not exist is a control with nothing behind it.
+        secondColorPopup.isEnabled = secondCatCheck.state == .on
         settingsDelegate?.settingsDidChange(currentValues())
     }
 
@@ -333,9 +408,17 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         colorPopup.itemArray.compactMap { $0.representedObject as? String }
     }
 
+    /// The coats currently in the second cat's popup, and whether it is usable. Exposed
+    /// for `--settings-test` for the same reason `offeredCoatIDs` is.
+    var secondCoatIDs: [String] {
+        secondColorPopup.itemArray.compactMap { $0.representedObject as? String }
+    }
+    var secondCoatPopupIsEnabled: Bool { secondColorPopup.isEnabled }
+
     func simulate(speed: Double? = nil, scale: Int? = nil, screen: String?? = nil,
                   menuBarIcon: Bool? = nil, color: String? = nil, userName: String? = nil,
-                  launchAtLogin: Bool? = nil) {
+                  launchAtLogin: Bool? = nil, secondCat: Bool? = nil,
+                  secondColor: String? = nil) {
         if let userName { nameField.stringValue = userName }
         if let speed { speedSlider.doubleValue = speed }
         if let scale { scalePopup.selectItem(withTag: scale) }
@@ -348,6 +431,13 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         if let color {
             let index = colorPopup.itemArray.firstIndex { ($0.representedObject as? String) == color }
             colorPopup.selectItem(at: index ?? 0)
+        }
+        if let secondCat { secondCatCheck.state = secondCat ? .on : .off }
+        if let secondColor {
+            let index = secondColorPopup.itemArray.firstIndex {
+                ($0.representedObject as? String) == secondColor
+            }
+            secondColorPopup.selectItem(at: index ?? 0)
         }
         controlChanged()
     }

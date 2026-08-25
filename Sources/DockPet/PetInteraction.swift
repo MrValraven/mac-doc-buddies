@@ -15,8 +15,14 @@ import DockPetCore
 
 /// What the interaction needs from the app, and what it asks the app to do.
 protocol PetInteractionDelegate: AnyObject {
-    /// What the pet should call the user, or `nil` if it should greet them without a name.
-    var interactionUserName: String? { get }
+    /// What *this* pet should call the user, or `nil` if it should greet them without a
+    /// name.
+    ///
+    /// [M11] Resolved per interaction rather than read once for the app. Each cat has its
+    /// own `userName`, and a property could only ever answer for one of them — the second
+    /// cat would greet you with the first cat's name, which looks exactly like a working
+    /// app until you notice it is answering for the wrong animal.
+    func interactionUserName(for interaction: PetInteraction) -> String?
     /// Sprite scale, so the bubble's border matches the art's pixel size.
     var interactionScale: Int { get }
     /// The screen the pet is on, for keeping the bubble on it.
@@ -24,9 +30,12 @@ protocol PetInteractionDelegate: AnyObject {
     /// [M11] The birthday, and the line said once a day, both read from the config.
     var interactionBirthday: String? { get }
     var interactionDedication: String? { get }
-    /// Put the pet into a state — how "Take a nap" takes effect, and how the pet stops
+    /// Put *this* pet into a state — how "Take a nap" takes effect, and how the pet stops
     /// walking while it talks.
-    func interactionForcePetState(_ state: PetState)
+    ///
+    /// [M11] Also resolved per interaction: a nap has to land on the cat that was clicked,
+    /// not on whichever one happens to be first in the array.
+    func interactionForcePetState(_ state: PetState, for interaction: PetInteraction)
     /// Open the Settings window, so the click menu is a complete way to reach the app for
     /// anyone who turned the menu bar icon off.
     func interactionShowSettings()
@@ -218,7 +227,7 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
             prompt = .birthday
         }
 
-        let name = delegate?.interactionUserName
+        let name = delegate?.interactionUserName(for: self)
         let reply = dedication.map { Phrasebook.render($0, name: name) }
             ?? phrasebook.reply(to: prompt, name: name)
 
@@ -238,7 +247,7 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
         // [M11] Applied on the dedication's click too. Every prompt must still do what it
         // says on the first click of the day — and this is also what stops the cat walking
         // out from under its own dedication.
-        delegate?.interactionForcePetState(prompt.forcedState ?? .idle)
+        delegate?.interactionForcePetState(prompt.forcedState ?? .idle, for: self)
 
         showBubble(reply)
 

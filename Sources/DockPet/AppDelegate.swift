@@ -193,8 +193,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // read and nothing else.
         if options.dockBounds { runDockBoundsProbe() }
 
-        // [M11] One profile for now; M11d turns this into `config.pets`.
-        let profiles = [PetProfile(name: nil, color: config.color, userName: config.userName)]
+        // [M11] Every cat this config asks for. `validated()` guarantees this is never
+        // empty, so there is no fallback here — one would hide a validator bug rather than
+        // fix it.
+        let profiles = config.pets
 
         // SPEC §5: a missing or malformed walk sheet is fatal and loud, never silently
         // skipped. Optional per-state sheets are not fatal — they degrade to a still pose.
@@ -358,6 +360,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                   + "\(pet.profile.palette.displayName) coat, \(sliced) walk frames")
             return pet
         }
+    }
+
+    /// [M11] Change the *number* of cats on the Dock.
+    ///
+    /// The old pets are torn down first. An orphaned ordered-in `NSWindow` is not freed by
+    /// `deinit` — AppKit retains a window that is on screen — so a dropped cat would
+    /// otherwise stay on the Dock forever with a live global mouse monitor behind it: a
+    /// leak that looks exactly like a rendering bug and is miserable to diagnose.
+    ///
+    /// Non-fatal on a sprite failure, unlike launch: this runs while cats are on screen,
+    /// and a cosmetic setting must not be able to take the pets away. The old cast is
+    /// already gone by then, so it says so rather than failing silently.
+    func rebuildPets(from cast: [PetProfile]) {
+        for pet in pets { pet.teardown() }
+        pets = []
+
+        do {
+            let (sets, notes) = try loadSpriteSets(for: cast)
+            spriteSets = sets
+            for note in notes { print("[settings]   \(note)") }
+        } catch {
+            print("[settings] !! could not load the sheets for \(cast.count) cat(s) — \(error)")
+            return
+        }
+        guard let reference = spriteSet else {
+            print("[settings] !! no sheets loaded, so there is nothing to build the cast from")
+            return
+        }
+
+        print("[settings] rebuilding the cast — \(cast.count) cat(s)")
+        buildPets(from: cast, size: petSizeFor(set: reference))
+        // Place and show them now rather than waiting out the poll, so the checkbox feels
+        // like it did something.
+        poll()
     }
 
     // MARK: - [M8] Dock confinement
@@ -551,6 +587,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         settle(0.3)
         check(menuBarItem != nil, "and comes back when re-enabled")
 
+        // --- [M11] the second cat ---
+        //
+        // Checked through to the pixels and to the live array, for the same reason the
+        // coat is: a checkbox that reached the config and nothing else would pass every
+        // assertion that only reads `config`.
+        func coatPixels(_ rgb: CatPalette.RGB, ofPet index: Int) -> Int {
+            guard index < pets.count, let set = sprites(for: pets[index]),
+                  let bytes = SpriteRecolor.rgbaBytes(of: set.walk.image) else { return -1 }
+            var found = 0, i = 0
+            while i + 3 < bytes.count {
+                if bytes[i + 3] == 255 && bytes[i] == rgb.red
+                    && bytes[i + 1] == rgb.green && bytes[i + 2] == rgb.blue { found += 1 }
+                i += 4
+            }
+            return found
+        }
+
+        let soloCoat = config.color
+        window.simulate(secondCat: true)
+        settle(0.2)
+        check(config.pets.count == 2, "the checkbox adds a second cat to the config",
+              "config has \(config.pets.count)")
+        check(pets.count == 2, "and a second cat is actually built",
+              "the array holds \(pets.count)")
+        check(window.secondCoatPopupIsEnabled, "its coat popup becomes usable")
+        check(window.secondCoatIDs == CatPalette.all.map(\.id),
+              "and offers every coat, in the catalogue's order", "got \(window.secondCoatIDs)")
+        check(config.pets.count == 2 && config.pets[1].color != soloCoat,
+              "the new cat wears a coat the first one is not wearing, so it is visibly a "
+              + "second cat",
+              "both are \(soloCoat)")
+        check(pets.count == 2 && pets[1].index == 1,
+              "the rebuilt array is indexed by position, so the log can tell them apart")
+        check(pets.count == 2 && pets[0].interaction !== pets[1].interaction,
+              "each cat has its own interaction — this is what makes a click resolvable")
+
+        window.simulate(secondColor: "grey")
+        settle(0.2)
+        check(config.pets.count == 2 && config.pets[1].color == "grey",
+              "the second coat popup reaches the second cat's profile",
+              "got \(config.pets.map(\.color))")
+        check(coatPixels(CatPalette.grey.coat, ofPet: 1) > 0,
+              "and its own sheet is actually repainted grey",
+              "found \(coatPixels(CatPalette.grey.coat, ofPet: 1)) grey coat pixels")
+        check(coatPixels(CatPalette.grey.coat, ofPet: 0) == 0,
+              "while the first cat keeps its own coat — one sheet per coat, not one for "
+              + "the app",
+              "pet 0 has \(coatPixels(CatPalette.grey.coat, ofPet: 0)) grey coat pixels")
+
+        let droppedWindow = pets.count == 2 ? pets[1].window : nil
+        window.simulate(secondCat: false)
+        settle(0.2)
+        check(config.pets.count == 1, "unchecking it drops the second cat from the config")
+        check(pets.count == 1, "and from the array", "the array holds \(pets.count)")
+        check(!window.secondCoatPopupIsEnabled, "its coat popup goes back to unusable")
+        // AppKit retains an on-screen window, so a dropped cat that is not dismissed
+        // explicitly stays on the Dock forever with a live mouse monitor behind it.
+        check(droppedWindow?.isVisible == false,
+              "the dropped cat's window is taken off screen rather than orphaned")
+
         // --- confinement is no longer a setting [M9] ---
         check(confinementStatus.isEmpty == false, "the window reports the confinement status")
         window.simulate(speed: 45)
@@ -568,8 +664,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
         // --- reset ---
         window.simulateReset()
-        check(config == .default, "Reset to Defaults restores the defaults",
-              "got speed=\(config.speed) scale=\(config.scale)")
+        // [M11] Compared against the *validated* defaults rather than `.default` itself.
+        // `validated()` fills the `pets` array in from the legacy keys, so no config that
+        // has been through it is ever equal to the bare defaults — and every config in the
+        // running app has been through it. The assertion, not the reset, was out of date.
+        let defaults = PetConfig.default.validated().config
+        check(config == defaults, "Reset to Defaults restores the defaults",
+              "got speed=\(config.speed) scale=\(config.scale) pets=\(config.pets.count)")
 
         // --- restore the user's real settings ---
         settingsDidChange(original)
@@ -962,25 +1063,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         for pet in pets { pet.walker.speed = CGFloat(config.speed) }
         locator.pinnedScreenName = config.screen
 
-        // [M11] A pet's identity comes from the config, so a coat or a name changed here
-        // has to reach the pet as well as the file. Three places report `profile.color` —
-        // the launch log, `--verbose` and `--render-test` — and a stale profile would have
-        // all three describing a cat that is not the one on screen.
-        for (index, profile) in Self.cast(of: newConfig).enumerated() where index < pets.count {
-            pets[index].profile = profile
-        }
+        let cast = Self.cast(of: newConfig)
+        if cast.count != pets.count {
+            // [M11] A changed *number* of cats is a rebuild, not an update: windows have
+            // to be created or dismissed and every interaction re-attached to a live view.
+            rebuildPets(from: cast)
+        } else {
+            // [M11] A pet's identity comes from the config, so a coat or a name changed
+            // here has to reach the pet as well as the file. Three places report
+            // `profile.color` — the launch log, `--verbose` and `--render-test` — and a
+            // stale profile would have all three describing a cat that is not on screen.
+            for (index, profile) in cast.enumerated() { pets[index].profile = profile }
 
-        // Reload when the cast is no longer wearing the coats that are loaded — a changed
-        // coat, and later a cat added or dropped. Stated as "what is wanted vs what is
-        // loaded" rather than as "did `config.color` change", because with two cats the
-        // second one's coat can change while the config's own coat does not.
-        if rebuildSprites, Set(pets.map(\.profile.palette.id)) != Set(spriteSets.keys) {
-            // The recolour happens as the sheets are decoded, so a new coat means reading
-            // them again — re-scaling the sets already in memory would only resize the
-            // colours they already have.
-            reloadSprites()
-        } else if rebuildSprites, config.scale != previous.scale {
-            applySprites(spriteSets)   // recomputes petSize at the new scale
+            // Reload when the cast is no longer wearing the coats that are loaded. Stated
+            // as "what is wanted vs what is loaded" rather than as "did `config.color`
+            // change", because with two cats the second one's coat can change while the
+            // config's own coat does not.
+            if rebuildSprites, Set(pets.map(\.profile.palette.id)) != Set(spriteSets.keys) {
+                // The recolour happens as the sheets are decoded, so a new coat means
+                // reading them again — re-scaling the sets already in memory would only
+                // resize the colours they already have.
+                reloadSprites()
+            } else if rebuildSprites, config.scale != previous.scale {
+                applySprites(spriteSets)   // recomputes petSize at the new scale
+            }
         }
         if config.menuBarIcon != previous.menuBarIcon {
             // Deferred: this can be called from the menu item's own action.
@@ -1026,7 +1132,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         return word
     }
 
-    var interactionUserName: String? { effectiveUserName }
+    /// Which cat is asking.
+    ///
+    /// [M11] The whole reason the delegate callbacks carry an interaction. Resolving to
+    /// `primaryPet` instead would put the *first* cat to sleep when you clicked the second
+    /// and greet you with the *first* cat's name — both of which look like a working app
+    /// until you notice it is answering for the wrong animal.
+    private func pet(for interaction: PetInteraction) -> Pet? {
+        pets.first { $0.interaction === interaction }
+    }
+
+    func interactionUserName(for interaction: PetInteraction) -> String? {
+        // A cat with no `userName` of its own falls back to the app-wide answer rather
+        // than to nothing: M10's rule is that a fresh install greets you properly without
+        // anyone having opened Settings, and that has to survive a second cat.
+        guard let pet = pet(for: interaction) else { return effectiveUserName }
+        return pet.profile.userName ?? effectiveUserName
+    }
+
     var interactionScale: Int { config.scale }
     var interactionScreen: NSScreen? { currentLocation?.screen }
     var interactionBirthday: String? { config.birthday }
@@ -1035,10 +1158,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// A click changed what the pet is doing. Unlike the poll's own transitions this can
     /// happen at any moment, so the sheet swap and the timer decision are both redone here.
     ///
-    /// [M11] Applied to `primaryPet`, which is the only pet there is until M11d adds the
-    /// second. The protocol gains a pet at the same time this becomes ambiguous.
-    func interactionForcePetState(_ state: PetState) {
-        guard let pet = primaryPet else { return }
+    /// [M11] Applied to the cat that was clicked, resolved by interaction identity — so
+    /// *Take a nap* on the second cat naps the second cat.
+    func interactionForcePetState(_ state: PetState, for interaction: PetInteraction) {
+        guard let pet = pet(for: interaction) else { return }
         let previous = pet.behavior.state
         pet.behavior.force(state)
         if pet.behavior.state != previous {
