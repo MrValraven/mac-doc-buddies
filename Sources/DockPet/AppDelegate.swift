@@ -206,6 +206,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // events by default; the interaction only switches that on while the cursor is
         // actually over the cat, so the Dock keeps every other click.
         interaction.delegate = self
+        // [M11] A self-test must not consume the once-a-day dedication or swap in a
+        // birthday greeting — see PetInteraction.isSelfTest.
+        interaction.isSelfTest = options.isSelfTest
         interaction.attach(to: view, in: window)
         print("  click menu       : \(PetPrompt.allCases.count) prompts, greeting "
               + (effectiveUserName.map { "\"\($0)\"" } ?? "nobody by name"))
@@ -1186,6 +1189,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     var interactionUserName: String? { effectiveUserName }
     var interactionScale: Int { config.scale }
     var interactionScreen: NSScreen? { currentLocation?.screen }
+    var interactionBirthday: String? { config.birthday }
+    var interactionDedication: String? { config.dedication }
 
     /// A click changed what the pet is doing. Unlike the poll's own transitions this can
     /// happen at any moment, so the sheet swap and the timer decision are both redone here.

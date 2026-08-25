@@ -21,6 +21,9 @@ protocol PetInteractionDelegate: AnyObject {
     var interactionScale: Int { get }
     /// The screen the pet is on, for keeping the bubble on it.
     var interactionScreen: NSScreen? { get }
+    /// [M11] The birthday, and the line said once a day, both read from the config.
+    var interactionBirthday: String? { get }
+    var interactionDedication: String? { get }
     /// Put the pet into a state — how "Take a nap" takes effect, and how the pet stops
     /// walking while it talks.
     func interactionForcePetState(_ state: PetState)
@@ -49,6 +52,12 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
 
     private var mouseMonitor: Any?
     private var menuIsOpen = false
+
+    /// [M11] True under `--interaction-test` and the other self-tests. A test run must not
+    /// consume the once-a-day dedication or swap in a birthday greeting — it would spend
+    /// the one thing this feature exists to deliver, on a day nobody would connect to the
+    /// cause.
+    var isSelfTest = false
 
     /// True while the pet has something to say. The app holds the behaviour clock still
     /// for the duration, so the cat does not wander out from under its own sentence.
@@ -135,7 +144,9 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
         menu.delegate = self
         menu.autoenablesItems = false
 
-        for prompt in PetPrompt.allCases {
+        // [M11] `.birthday` is not a prompt anyone picks — it is swapped in for `.hello`
+        // on the day. Listing it would leave a dead menu item for the other 364.
+        for prompt in PetPrompt.allCases where prompt != .birthday {
             if prompt == .nap { menu.addItem(.separator()) }
             let item = NSMenuItem(title: prompt.menuTitle,
                                   action: #selector(promptChosen(_:)), keyEquivalent: "")
@@ -175,6 +186,27 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
 
     /// Answer a prompt: pick the words, stop the pet, and put the bubble up.
     func say(_ prompt: PetPrompt) {
+        var prompt = prompt
+
+        // [M11] On the day, "Say hello" greets you for the birthday instead. Swapped here
+        // rather than in the menu so the menu item keeps its ordinary title all year.
+        let today = Date()
+        if !isSelfTest, prompt == .hello,
+           Occasion.isBirthday(today, birthday: delegate?.interactionBirthday) {
+            prompt = .birthday
+        }
+
+        // [M11] The dedication pre-empts the first reply of the day, whatever was asked.
+        // Once only: `lastGreetedDay` is stamped before the bubble is shown, so a second
+        // click a moment later gets the ordinary reply.
+        let stamp = Occasion.dayStamp(today)
+        if !isSelfTest, let dedication = delegate?.interactionDedication,
+           StateStore.lastGreetedDay != stamp {
+            StateStore.lastGreetedDay = stamp
+            showBubble(Phrasebook.render(dedication, name: delegate?.interactionUserName))
+            return
+        }
+
         let name = delegate?.interactionUserName
         let reply = phrasebook.reply(to: prompt, name: name)
 
@@ -193,7 +225,11 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
 
     // MARK: - The bubble
 
-    private func showBubble(_ text: String) {
+    /// Put a line in the pet's speech bubble.
+    ///
+    /// [M11] Not `private`: the meeting between two cats presents a bubble from
+    /// `AppDelegate`, and two methods that both put text in a bubble would drift apart.
+    func showBubble(_ text: String) {
         dismissBubble()
         guard let delegate = delegate else { return }
 
