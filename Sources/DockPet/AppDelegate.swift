@@ -138,6 +138,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// Kept alive for the lifetime of the app; a released source stops delivering.
     var reloadSignalSource: DispatchSourceSignal?
 
+    /// [M11] One coordinator for the pair, seeded like everything else in the app that
+    /// rolls dice (SPEC §9). It owns the decision — have they met, is the cooldown up,
+    /// which pair of lines — and this file only applies it.
+    private var meetings = MeetingCoordinator(seed: UInt64.random(in: UInt64.min...UInt64.max))
+
     var currentLocation: DockLocation?
     private var lastAnimationTime: CFTimeInterval = 0
     /// Two independent transition logs. A single slot made them alternate — the location
@@ -792,6 +797,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                 }
             }
 
+            // [M11] Once per poll, with the poll's real elapsed time. The coordinator
+            // clamps a long step itself, for the same reason `Walker` does — a stalled
+            // process must not burn the whole cooldown in one tick — so nothing here tries
+            // to compensate for that clamp.
+            meetings.advance(by: dt)
+            considerMeeting()
+
         case .absent(let reason):
             currentLocation = nil
             for pet in pets where pet.window.isVisible { pet.window.orderOut(nil) }
@@ -858,6 +870,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         for pet in pets {
             pet.advanceAnimation(by: dt, on: strip, spriteSet: sprites(for: pet))
         }
+    }
+
+    // MARK: - [M11] The meeting
+
+    /// Two cats have walked into each other: stop, face each other, trade a line, part.
+    ///
+    /// **They turn around rather than passing through**, and that is a correctness
+    /// requirement rather than a flourish. Two pets that pass through each other overlap
+    /// for several consecutive ticks and would re-trigger this on every one; turning them
+    /// around separates them monotonically, so the cooldown is the only suppression
+    /// needed. No new art either — facing is the horizontal flip §5 already does, and
+    /// `sit` already has a sheet.
+    private func considerMeeting() {
+        guard pets.count == 2 else { return }
+        let a = pets[0], b = pets[1]
+
+        // Neither cat interrupts itself mid-sentence, and a cat being clicked is having a
+        // conversation with a human, which takes precedence over one with a cat.
+        guard !a.interaction.isTalking, !b.interaction.isTalking else { return }
+
+        guard let exchange = meetings.meet(a.window.frame, b.window.frame,
+                                           openerName: a.profile.name,
+                                           replierName: b.profile.name) else { return }
+
+        for pet in [a, b] {
+            pet.behavior.force(.sit)
+            pet.applyBehaviorState(.sit, spriteSet: sprites(for: pet))
+        }
+        // Face each other: the left-hand cat looks right, the right-hand cat looks left.
+        let aIsLeft = a.window.frame.minX <= b.window.frame.minX
+        a.view.facing = aIsLeft ? .right : .left
+        b.view.facing = aIsLeft ? .left : .right
+
+        // SPEC §9: an exchange nobody can see has to be readable in the log.
+        print("[meet] pet \(a.index) → \"\(exchange.opener)\"")
+        a.interaction.showBubble(exchange.opener)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + MeetingCoordinator.replyDelay) {
+            [weak self, weak b] in
+            // Weak on both, and the pet is confirmed still in the array before it speaks:
+            // Settings can rebuild the cast during the second and a half between the line
+            // and its answer, and a torn-down cat must not put a bubble back on screen.
+            guard let self, let b, self.pets.contains(where: { $0 === b }) else { return }
+            print("[meet] pet \(b.index) → \"\(exchange.reply)\"")
+            b.interaction.showBubble(exchange.reply)
+        }
+
+        // Both turn around and walk back the way they came, so the next tick separates
+        // them instead of finding them still overlapping.
+        for pet in [a, b] { pet.walker.reverse() }
+        updateAnimationState()
     }
 
     // MARK: - Logging
