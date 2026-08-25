@@ -3,11 +3,12 @@
 //
 //  SPEC §7 M11a. §1 admits `ServiceManagement` for this and nothing else.
 //
-//  Which mechanism is used is settled by trying `SMAppService` against the real .app
-//  bundle, not by preference: `SMAppService` requires a signed bundle, and DockPet is
-//  signed with a *local* self-signed identity (§8.6 [M11]) that no other Mac trusts. If
-//  registration is refused under that signature, the launchd path is used instead.
-//  Callers cannot tell which branch is live.
+//  `SMAppService` requires a signed bundle, and DockPet is signed with a *local*
+//  self-signed identity (§8.6 [M11]) that no other Mac trusts — so it was not a given that
+//  registration would be accepted under that signature. It was verified directly against
+//  the real, signed `.app` bundle built by bundle.sh: `SMAppService.mainApp.register()`
+//  and `.unregister()` both succeed outright (status goes to `.enabled` / not registered,
+//  never `.notFound`). There is no launchd fallback — this is the only mechanism.
 //
 
 import Foundation

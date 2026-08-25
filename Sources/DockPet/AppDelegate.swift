@@ -1094,7 +1094,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// afterwards and would otherwise rebuild the view twice.
     private func applyConfig(_ newConfig: PetConfig, persist: Bool, rebuildSprites: Bool = true) {
         let previous = config
-        if newConfig.launchAtLogin != config.launchAtLogin {
+        // [M11] Guarded the same way as the launch-time call: a self-test must not rewrite
+        // the user's real login item as a side effect of checking something else.
+        if !options.isSelfTest, newConfig.launchAtLogin != config.launchAtLogin {
             LoginItem.setEnabled(newConfig.launchAtLogin)
         }
         config = newConfig
