@@ -18,7 +18,7 @@ enum OccupancyTests {
             // Spelled out as a list rather than asserted pairwise: the order *is* the
             // design, and a reader who wants to know whether a click beats a meeting
             // should be able to read the answer rather than derive it.
-            let ascending: [PetActivity] = [.attention, .napSpot, .reacting, .meeting,
+            let ascending: [PetActivity] = [.napSpot, .reacting, .meeting,
                                             .talking, .petted, .kiss, .scene]
             var sorted = true
             for (lower, higher) in zip(ascending, ascending.dropFirst()) where !(lower < higher) {
@@ -28,8 +28,6 @@ enum OccupancyTests {
         }
 
         do {
-            check(PetActivity.attention < PetActivity.talking,
-                  "watching the cursor never interrupts the cat answering a click")
             check(PetActivity.reacting < PetActivity.talking,
                   "a remark about an app never interrupts a reply she asked for")
             check(PetActivity.meeting < PetActivity.petted,
@@ -47,25 +45,25 @@ enum OccupancyTests {
         do {
             var occupancy = PetOccupancy(petCount: 2)
             eq(occupancy.activity(of: 0), nil, "a fresh cat is owned by nobody")
-            check(occupancy.isAvailable(0, for: .attention), "and is available to anything")
+            check(occupancy.isAvailable(0, for: .napSpot), "and is available to anything")
 
-            check(occupancy.claim(.attention, pets: [0]), "the first claim is granted")
-            eq(occupancy.activity(of: 0), .attention, "and is recorded")
-            check(!occupancy.isAvailable(0, for: .attention),
+            check(occupancy.claim(.napSpot, pets: [0]), "the first claim is granted")
+            eq(occupancy.activity(of: 0), .napSpot, "and is recorded")
+            check(!occupancy.isAvailable(0, for: .napSpot),
                   "an activity cannot claim a cat it already holds, which would restart it")
         }
 
         do {
             var occupancy = PetOccupancy(petCount: 2)
             check(occupancy.claim(.talking, pets: [0]), "the cat is answering a click")
-            check(!occupancy.claim(.attention, pets: [0]),
+            check(!occupancy.claim(.napSpot, pets: [0]),
                   "a lower-priority activity is refused rather than queued")
             eq(occupancy.activity(of: 0), .talking, "and the holder is untouched by the attempt")
         }
 
         do {
             var occupancy = PetOccupancy(petCount: 2)
-            check(occupancy.claim(.attention, pets: [0]), "the cat is watching the cursor")
+            check(occupancy.claim(.napSpot, pets: [0]), "the cat is walking to a tile")
             check(occupancy.claim(.talking, pets: [0]), "a click takes it away")
             eq(occupancy.activity(of: 0), .talking, "and becomes the holder")
         }
@@ -91,7 +89,7 @@ enum OccupancyTests {
 
         do {
             var occupancy = PetOccupancy(petCount: 2)
-            check(occupancy.claim(.attention, pets: [0]), "cat 0 is watching the cursor")
+            check(occupancy.claim(.napSpot, pets: [0]), "cat 0 is walking to a tile")
             check(occupancy.claim(.kiss, pets: [0, 1]),
                   "a kiss outranks it, so the pair is taken")
             eq(occupancy.activity(of: 0), .kiss, "cat 0 changes hands")
@@ -110,11 +108,11 @@ enum OccupancyTests {
 
         do {
             var occupancy = PetOccupancy(petCount: 2)
-            occupancy.claim(.attention, pets: [0])
+            occupancy.claim(.napSpot, pets: [0])
             occupancy.claim(.talking, pets: [0])
-            // The attention coordinator does not know it lost. It finds out by releasing
-            // and being ignored. Without this rule it would take the click's turn away.
-            occupancy.release(.attention, pets: [0])
+            // The nap trip does not know it lost. It finds out by releasing and being
+            // ignored. Without this rule it would take the click's turn away.
+            occupancy.release(.napSpot, pets: [0])
             eq(occupancy.activity(of: 0), .talking,
                "an activity that was preempted cannot release the one that took its place")
         }

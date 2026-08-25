@@ -28,7 +28,7 @@ import Foundation
 /// The order **is** the design, and it reads bottom-up as "how much has the user got to do
 /// with this":
 ///
-///   * `attention` and `napSpot` are the cat amusing itself. Anything may interrupt them.
+///   * `napSpot` is the cat amusing itself. Anything may interrupt it.
 ///   * `reacting` is the cat volunteering a remark. It waits its turn behind everything the
 ///     user actually asked for.
 ///   * `meeting` is the two cats' own business, and it sits *below* `talking` and `petted`
@@ -43,7 +43,6 @@ import Foundation
 /// `scene` is the top because it happens once a year and nothing on this list is worth
 /// spoiling it for.
 public enum PetActivity: Int, Comparable, CaseIterable, Equatable {
-    case attention
     case napSpot
     case reacting
     case meeting

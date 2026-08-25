@@ -376,15 +376,20 @@ enum RenderTest {
 
         // --- [M13] which poses can face a direction at all ----------------------------
         //
-        // The cursor-attention feature asks a cat to turn and look at the pointer, and it
-        // can only do that in a pose the view will actually mirror. Which poses those are
-        // is a property of the *art*, not of the wiring: idle and sit are drawn front-on
-        // on purpose (see makesprite.swift, "a cat that stops walking turns to look at
-        // you"), so setting `facing` on them is a no-op by design.
+        // Which poses can be pointed at something is a property of the *art*, not of the
+        // wiring: idle and sit are drawn front-on on purpose (see makesprite.swift, "a cat
+        // that stops walking turns to look at you"), so setting `facing` on them is a
+        // no-op by design.
+        //
+        // This was learned by building a cursor-attention feature that asked a sitting cat
+        // to turn toward the pointer. It could not, the cats stopped without ever turning,
+        // and the feature was withdrawn (SPEC §7 M13d). The constraint outlives it: the
+        // meeting and the kiss also set `facing` on a sitting cat and also produce no
+        // visible turn, which is fine there and worth knowing.
         //
         // Pinned here because nothing else would catch it. Setting `facing` on a front-on
-        // pose is silent: no warning, no log line, and a cat that stops but never turns
-        // looks exactly like a cat whose turn is simply subtle.
+        // pose is silent: no warning, no log line, and a cat that does not turn looks
+        // exactly like a cat whose turn is simply subtle.
         print("\n[M13] which poses have a direction")
         if let idleLeft = render(view, frame: 0, facing: .left, state: .idle),
            let idleRight = render(view, frame: 0, facing: .right, state: .idle) {

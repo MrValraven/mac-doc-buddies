@@ -15,6 +15,7 @@ before that date. Tier 2 and Tier 3 are what keeps the app alive after it.
 | Status | Meaning |
 | --- | --- |
 | `Done` | Shipped, and seen working on a real Dock. |
+| `Removed` | Built, then deliberately taken out. The reason is recorded. |
 | `Built, unseen` | Shipped and unit tested, but never yet watched running. See the note below. |
 | `Ready` | Nothing to build. A config edit or a rehearsal. Just not done yet. |
 | `Proposed` | Wanted, not yet designed or approved. |
@@ -190,32 +191,38 @@ unseen status.
 
 ---
 
-## Tier 2: three of six shipped in M13
+## Tier 2: two of six shipped in M13, one built and withdrawn
 
 | # | Item | Cost | Status |
 | --- | --- | --- | --- |
-| 12 | The cats notice the cursor | M | `Built, unseen` |
+| 12 | The cats notice the cursor | M | `Removed`, see below |
 | 13 | Sleeping on a Dock icon | M | `Built, unseen` |
 | 14 | Reacting to apps | M | `Done` |
 | 15 | A third cat / a kitten | L | `Deferred` |
 | 16 | A small "us" panel | M | `Proposed` |
 | 17 | Uninstall menu item | S | `Proposed` |
 
-### 12. The cats notice the cursor: `Built, unseen`
+### 12. The cats notice the cursor: `Removed`
 
-Turn and watch, never chase. Chasing was rejected outright: it turns a decoration into
-something moving under her hand while she works.
+Built, merged, then taken out the same day. Worth recording why rather than leaving it to be
+proposed again next month.
 
-Hysteresis turned out to be three separate problems needing three separate fixes: which cat
-(stickiness, 24 pt), in or out of the zone (asymmetric bounds, 120 in / 150 out), and which
-way it faces (a 12 pt dead zone, the easy one to miss). Each has a test that jiggles the
-pointer across the exact boundary 60 times and asserts zero transitions, and each was
-confirmed load-bearing by zeroing its margin and watching 30, 59 and 30 flips appear.
+It worked: the cats stopped when the pointer came near, the hysteresis held, the cooldowns
+held. What it could not do was *turn*. `PetView` mirrors only the walk sheet, because idle
+and sit are drawn front-on on purpose (`makesprite.swift`: "a cat that stops walking turns to
+look at you rather than freezing mid-stride"). The feature put the cat into idle and then
+sit, so it asked for a turn from the only two poses in this app that have no left or right.
+On screen that reads as cats stopping for no reason, which is worse than cats doing nothing.
 
-A 12 second episode ceiling regardless of how long the pointer stays, so a mouse that simply
-lives near the Dock cannot freeze a cat in a sit all afternoon.
+The three ways out were: hold a walk frame instead (fights the art's stated intent), draw an
+alert pose (a new sheet, which SPEC §7 M12 forbids), or drop it. Dropped.
 
-Switchable with `"attention": false`.
+**What survives:** a `--render-test` check that renders idle, sit and walk facing each way
+and asserts the first two are pixel-identical. That constraint is real and applies beyond
+this feature: the meeting and the kiss both set `facing` on a sitting cat and also produce no
+visible turn. That is fine there, and now it is written down.
+
+**If it is ever wanted again**, it needs the art first, not the code. The code is in git.
 
 ### 13. Sleeping on a Dock icon: `Built, unseen`
 
@@ -287,14 +294,10 @@ Unchanged.
 
 Small, deliberate, and worth writing down rather than rediscovering.
 
-- **No Settings UI** for `reactions` or `attention`. Config file only. Seven new checkboxes
-  is a day better spent on the scene working.
+- **No Settings UI** for `reactions`. Config file only.
 - **`HeartsWindow.dismiss()` does not run its `onFinish`**, while the new
   `ConfettiWindow.dismiss()` does. A real gap in the hearts, but nothing in the kiss depends
   on it, and this is not the week to touch a working sequence.
-- **`CursorWatcher` runs its own global mouse monitor** alongside the one each
-  `PetInteraction` already has. Built that way so two agents could work in parallel without
-  fighting over one file. Worth consolidating; costs nothing today.
 - **The README still has 42 em dashes** in sections M13 did not touch. A full pass is worth
   doing and is not worth doing two days before the birthday.
 

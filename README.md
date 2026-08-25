@@ -88,7 +88,7 @@ Written with defaults on first launch to
 ```json
 { "speed": 30, "scale": 2, "screen": null, "menuBarIcon": true, "color": "olive",
   "userName": null, "launchAtLogin": true, "birthday": null, "dedication": null,
-  "kisses": true, "reactions": true, "attention": true }
+  "kisses": true, "reactions": true }
 ```
 
 - `speed`: points per second (clamped to `0 < speed <= 500`)
@@ -119,8 +119,6 @@ Written with defaults on first launch to
   dedication, so it is not repeated on the next click
 - `reactions`: whether a cat may remark on the app you just brought to the front. Defaults
   to `true`; see **Reacting to apps** below
-- `attention`: whether a cat turns to watch the pointer when it comes near the Dock.
-  Defaults to `true`; see **Noticing the cursor** below
 
 Bad values are clamped and logged, never fatal. Reload without restarting via the menu
 bar's **Reload Sprites & Config**, or from a shell:
@@ -211,7 +209,7 @@ exits. It needs Accessibility, like the pet itself.
 
 ## Being noticed
 
-Four things the cats now do without being asked.
+Three things the cats now do without being asked.
 
 ### The time of day
 
@@ -231,16 +229,6 @@ A quick click still opens the prompt menu, exactly as before. The threshold is 0
 three times an ordinary click: below roughly 0.2 s a slow click would be swallowed, and much
 above half a second the hold feels like nothing happened. The menu now opens on mouse *up*,
 because until the button comes up there is no way to tell a click from the start of a hold.
-
-### Noticing the cursor
-
-Move the pointer near the Dock and the nearest cat stops, turns to face it, and sits a beat
-later. It does **not** chase the pointer: a cat walking toward the cursor turns a decoration
-into something moving under your hand while you work.
-
-It gives up after 12 seconds however long the pointer stays, so a mouse that simply lives
-near the Dock cannot freeze a cat in a sit all afternoon. Set `"attention": false` to switch
-it off.
 
 ### Sleeping on a Dock icon
 

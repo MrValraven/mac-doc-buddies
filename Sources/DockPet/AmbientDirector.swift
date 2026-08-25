@@ -39,63 +39,6 @@ extension AppDelegate {
             || occupancy.activity(of: pet.index) == activity
     }
 
-    // MARK: - [M13] Watching the cursor
-
-    /// One frame of attention. Called from the animation tick, after the pair sequences
-    /// have had their say, so a cat that a kiss or the scene is steering is already
-    /// unavailable by the time this asks.
-    func advanceAttention(by dt: TimeInterval, on strip: WalkStrip) {
-        guard config.attention else { return }
-
-        let candidates = pets.map {
-            AttentionCoordinator.Candidate(index: $0.index,
-                                           frame: $0.window.frame,
-                                           isAvailable: isFree($0, for: .attention))
-        }
-
-        let focus = attention.advance(by: dt, on: strip, candidates: candidates)
-
-        // Hand back any cat this had and no longer has, before claiming the new one. A cat
-        // released after the claim would release the claim just made, when the focus moved
-        // from one cat to the other and both lines named `.attention`.
-        for pet in pets where pet.index != focus?.petIndex {
-            occupancy.release(.attention, pets: [pet.index])
-        }
-
-        guard let focus, let pet = pets.first(where: { $0.index == focus.petIndex }) else {
-            return
-        }
-        guard occupancy.activity(of: pet.index) == .attention
-                || occupancy.claim(.attention, pets: [pet.index]) else { return }
-
-        // `.idle` while it notices, `.sit` once it settles. Both are stationary, so the
-        // existing "only walking moves the pet" rule does the stopping and this needs no
-        // switch of its own.
-        if pet.behavior.state != focus.petState {
-            pet.behavior.force(focus.petState)
-            pet.applyBehaviorState(focus.petState, spriteSet: sprites(for: pet))
-        }
-        pet.view.facing = focus.facing == .forward ? .right : .left
-        // So it resumes walking the way it was left looking, rather than moonwalking off.
-        if pet.walker.direction != focus.facing { pet.walker.reverse() }
-    }
-
-    /// The cursor moved. The one caller of `noteCursor`, and it decides nothing itself.
-    func cursorWatcher(_ watcher: CursorWatcher, movedTo point: CGPoint) {
-        guard config.attention else { return }
-        attention.noteCursor(point)
-
-        // SPEC §6 wake-up. The coordinator's clock rides on the animation tick, and that
-        // tick suspends when every cat is stationary, so a pointer arriving while all of
-        // them sit still would never be advanced into an episode at all.
-        if let location = currentLocation,
-           let strip = Geometry.walkStrip(on: DockLocator.geometry(of: location.screen),
-                                          policy: .horizontalOnly, tiles: location.tiles),
-           AttentionCoordinator.isNear(point, strip: strip) {
-            updateAnimationState()
-        }
-    }
-
     // MARK: - [M13] Napping on a Dock icon
 
     /// A cat has just decided to sleep: send it to a tile first, if there is one to go to.

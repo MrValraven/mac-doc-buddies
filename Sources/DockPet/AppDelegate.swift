@@ -86,7 +86,7 @@ enum AnimationSuspension: String {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, SettingsWindowDelegate,
-                         CursorWatcherDelegate, AppWatcherDelegate,
+                         AppWatcherDelegate,
                          PetInteractionDelegate {
 
     /// [M6] Sprite scale, walk speed and pinned screen now come from config.json.
@@ -178,10 +178,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
     /// [M13] The birthday scene in progress, or `nil`, which is every day but one.
     var scene: SceneInProgress?
-
-    /// [M13] Which cat, if any, is watching the pointer, and how long it has been.
-    var attention = AttentionCoordinator()
-    let cursorWatcher = CursorWatcher()
 
     /// [M13] Which Dock tile a cat about to sleep should walk to. Seeded like everything
     /// else in this app that rolls dice (SPEC §9).
@@ -364,8 +360,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // [M13] Both are event driven and add no timer of their own (SPEC §6). Started
         // after the self-test modes above, every one of which exits, so a test run never
         // installs a monitor it will not live long enough to remove.
-        cursorWatcher.delegate = self
-        cursorWatcher.start()
         appWatcher.delegate = self
         appWatcher.start()
 
@@ -963,7 +957,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // [M13] Two more global monitors, installed once for the app rather than per pet.
         // Same reason as above: a monitor that outlives the app is a callback into a
         // half-dead one.
-        cursorWatcher.stop()
         appWatcher.stop()
         for pet in pets { pet.teardown() }
     }
@@ -1129,10 +1122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // announcement, the confetti and the wish, so the frame they sit down on is the one
         // the timer would otherwise stop at, taking the clock that ends the scene with it.
         if scene != nil { return nil }
-        // [M13] A cat watching the pointer is stationary by definition, so without this the
-        // timer stops on the frame it turns to look, taking the clock that ends the episode
-        // with it and leaving the cat staring for good.
-        if attention.isEngaged { return nil }
         // [M13] And a cat walking to a tile is in `.sleep`, which is stationary, so the
         // same stop would strand it sliding half way there.
         if pets.contains(where: { $0.napTrip != nil }) { return nil }
@@ -1191,9 +1180,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // the phase it lands on this frame is what `moves:` below is asked about.
         advanceKiss(by: dt, on: strip)
         advanceScene(by: dt, on: strip)
-        // [M13] After both pair sequences, so a cat either of them is steering is already
-        // unavailable by the time attention asks for it.
-        advanceAttention(by: dt, on: strip)
 
         // [M11] One timer, every pet. SPEC §6: a second cat must not double the app's
         // wakeups — only the work done inside a wakeup.

@@ -876,11 +876,19 @@ its cat.
 - **13c, particles.** `ConfettiDrift` is `HeartDrift`'s sibling with gravity the other way
   up. Real gravity was tried and rejected: it left pieces hanging at the top and whipping past
   the cats.
-- **13d, attention.** The cats turn to watch the cursor and never chase it. Hysteresis is
-  three separate problems (which cat, in or out of the zone, which way it faces) and needed
-  three separate fixes; each has a test that jiggles the pointer across the exact boundary 60
-  times and asserts zero transitions, and each was confirmed load-bearing by zeroing its
-  margin and watching the flips appear.
+- **13d, attention: built, then removed.** The cats turned to watch the cursor. It was
+  written, tested (three kinds of hysteresis, each with a boundary test proven load-bearing
+  by zeroing its margin) and merged, and then taken out again on 2026-08-25 because it could
+  not work with this art. `PetView` mirrors only the walk sheet, because idle and sit are
+  drawn front-on on purpose: a cat that stops walking should look at *you* rather than freeze
+  mid-stride. Attention put the cat in idle and then sit, so it was asking for a turn from
+  the only two poses in the app that have no left or right. The cats stopped and never
+  turned, which reads as a bug rather than as restraint.
+  The options were to hold a walk frame (fighting the art's stated intent), to draw an alert
+  pose (a new sheet, which §7 M12 forbids), or to drop it. Dropped. What survives is the
+  `--render-test` check that pins which poses can face a direction at all, because the
+  meeting and the kiss also set `facing` on a sitting cat and also do nothing visible; that
+  is fine there and was worth writing down.
 - **13e, the nap spot.** A cat walks to a random Dock tile to sleep on it. The 8 second
   ceiling is not the kiss's 10 and not for the kiss's reason: crossing the measured 748 pt
   Dock at 30 pt/s takes 25 s, longer than the longest sleep dwell, so without a ceiling a cat

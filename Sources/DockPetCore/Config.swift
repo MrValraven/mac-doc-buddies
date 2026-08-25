@@ -77,13 +77,6 @@ public struct PetConfig: Codable, Equatable {
     /// is why it gets a key of its own rather than riding on another.
     public var reactions: Bool
 
-    /// [M13] Whether a cat turns to watch the pointer when it comes near the Dock.
-    ///
-    /// Defaults on. Off is for someone who finds movement near the cursor distracting
-    /// while they work, which is a real preference and not one worth making them edit the
-    /// source to satisfy.
-    public var attention: Bool
-
     /// The chosen coat, falling back to the default rather than to nothing. `validated()`
     /// has already replaced an unknown id by the time a config is in use; this fallback is
     /// for the un-validated case, where an invisible cat would be the worse answer.
@@ -98,7 +91,7 @@ public struct PetConfig: Codable, Equatable {
                 menuBarIcon: Bool = true, color: String = CatPalette.default.id,
                 userName: String? = nil, launchAtLogin: Bool = true,
                 pets: [PetProfile] = [], birthday: String? = nil, dedication: String? = nil,
-                kisses: Bool = true, reactions: Bool = true, attention: Bool = true) {
+                kisses: Bool = true, reactions: Bool = true) {
         self.speed = speed
         self.scale = scale
         self.screen = screen
@@ -111,7 +104,6 @@ public struct PetConfig: Codable, Equatable {
         self.dedication = dedication
         self.kisses = kisses
         self.reactions = reactions
-        self.attention = attention
     }
 
     /// Missing keys fall back to the defaults, so a partial config file is valid and a
@@ -133,8 +125,6 @@ public struct PetConfig: Codable, Equatable {
         self.kisses = try c.decodeIfPresent(Bool.self, forKey: .kisses) ?? PetConfig.default.kisses
         self.reactions = try c.decodeIfPresent(Bool.self, forKey: .reactions)
             ?? PetConfig.default.reactions
-        self.attention = try c.decodeIfPresent(Bool.self, forKey: .attention)
-            ?? PetConfig.default.attention
     }
 
     /// Longest name that still fits in a speech bubble beside a Dock-sized cat.
