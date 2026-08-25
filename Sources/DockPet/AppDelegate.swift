@@ -92,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     private var menuBarItem: MenuBarItem?
     private var settingsWindow: SettingsWindow?
     private var saveDebounce: Timer?
+    /// [M11] Non-nil only while the grant is missing and someone is being shown why.
+    private var onboarding: OnboardingWindow?
     private var paused = false
     /// Kept alive for the lifetime of the app; a released source stops delivering.
     /// [M10] Clicking the pet: hit testing, the prompt menu, and the speech bubble.
@@ -241,6 +243,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         if options.settingsTest { runSettingsTest() }
         if options.menuTest { runMenuTest() }
         if options.interactionTest { runInteractionTest() }
+
+        // [M11] Skipped under a self-test: a test run must not put a window on screen and
+        // wait for a human. Skipped when already granted, which is the normal case for me
+        // and the case this window would only be noise in.
+        if !options.isSelfTest && !DockTiles.isTrusted {
+            let window = OnboardingWindow(onGrant: { [weak self] in
+                self?.requestDockConfinement()
+            })
+            onboarding = window
+            window.orderFrontRegardless()
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     // MARK: - [M8] Dock confinement
@@ -796,6 +810,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
         switch locator.locate() {
         case .located(let location):
+            // [M11] The poll is the only thing that knows the grant actually worked —
+            // `DockTiles.isTrusted` can go true a moment before the tiles are readable.
+            onboarding?.markGranted()
             currentLocation = location
 
             // The behaviour clock only runs while the pet is actually on screen — a pet
