@@ -73,41 +73,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// SPEC §6: 10–12 fps, never 60.
     private static let animationFPS: Double = 12
 
-    private let options: LaunchOptions
+    let options: LaunchOptions
     private var locator = DockLocator()
-    private var config = PetConfig.default
+    var config = PetConfig.default
 
-    private var window: PetWindow?
-    private var locatorTimer: Timer?
-    private var animationTimer: Timer?
+    // [M11] The members below are `internal` rather than `private` because the pet-facing
+    // self-tests moved to PetSelfTests.swift with the `Pet` extraction, and Swift's
+    // `private` is file-scoped. Nothing outside this module can see them either way.
+
+    /// [M11] Every pet on the Dock. Exactly one until M11d; the cap is
+    /// `PetConfig.maximumPets`.
+    ///
+    /// SPEC §6 [M11]: the array is *driven* by the single animation timer and the single
+    /// 500 ms poll below. A second cat must not double the app's wakeups — only the work
+    /// done inside a wakeup.
+    var pets: [Pet] = []
+
+    /// The pet the single-pet code paths mean — the menu bar, the settings window, the
+    /// self-tests. Optional rather than force-unwrapped: it is empty before
+    /// `applicationDidFinishLaunching` has built anything.
+    var primaryPet: Pet? { pets.first }
+
+    var locatorTimer: Timer?
+    var animationTimer: Timer?
     private var verboseTimer: Timer?
 
-    /// SPEC §7 M5. Seeded from the system generator so each launch differs, while the type
-    /// itself stays deterministic and testable.
-    private var behavior = BehaviorMachine(seed: UInt64.random(in: UInt64.min...UInt64.max))
     private var lastPollTime: CFTimeInterval = 0
 
-    private var spriteSet: SpriteSet?
-    private var petView: PetView?
-    private var menuBarItem: MenuBarItem?
+    var spriteSet: SpriteSet?
+    var menuBarItem: MenuBarItem?
     private var settingsWindow: SettingsWindow?
     private var saveDebounce: Timer?
     /// [M11] Non-nil only while the grant is missing and someone is being shown why.
     private var onboarding: OnboardingWindow?
     private var paused = false
+
     /// Kept alive for the lifetime of the app; a released source stops delivering.
-    /// [M10] Clicking the pet: hit testing, the prompt menu, and the speech bubble.
-    private let interaction = PetInteraction()
+    var reloadSignalSource: DispatchSourceSignal?
 
-    private var reloadSignalSource: DispatchSourceSignal?
-    private var sequencer = FrameSequencer(frameCount: 1, fps: 1)
-
-    /// Size in points, derived from the sheet — never hardcoded (SPEC §5).
-    private var petSize: CGSize = .zero
-
-    private var currentLocation: DockLocation?
-    /// Speed is overwritten from config.json at launch.
-    private var walker = Walker(speed: 30)
+    var currentLocation: DockLocation?
     private var lastAnimationTime: CFTimeInterval = 0
     /// Two independent transition logs. A single slot made them alternate — the location
     /// line and the animation line differ from each other, so each always looked like a
@@ -140,7 +144,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // [M6] Config first: it decides scale, speed and which screen to use.
         let outcome = ConfigStore.load()
         config = outcome.config
-        walker.speed = CGFloat(config.speed)
         locator.pinnedScreenName = config.screen
         print("  config           : \(ConfigStore.url.path)")
         for note in outcome.notes { print("    \(note)") }
@@ -175,13 +178,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         }
         self.spriteSet = set
         let m = set.walk.metadata
-        self.sequencer = FrameSequencer(frameCount: m.frameCount, fps: m.fps)
-        self.petSize = m.pointSize(scale: config.scale)
+        let size = petSizeFor(set: set)
 
         print("  sprite           : \(set.walk.origin)")
         print("  walk sheet       : \(m.frameCount) frames, \(m.frameWidth)x\(m.frameHeight) px each, \(Self.f(CGFloat(m.fps))) fps")
         for note in spriteNotes { print("    \(note)") }
-        print("  drawn at         : \(Self.f(petSize.width))x\(Self.f(petSize.height)) pt (scale \(config.scale)x)")
+        print("  drawn at         : \(Self.f(size.width))x\(Self.f(size.height)) pt (scale \(config.scale)x)")
         for screen in NSScreen.screens {
             let ratio = m.devicePixelsPerArtPixel(scale: config.scale,
                                                   backingScaleFactor: screen.backingScaleFactor)
@@ -189,27 +191,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             print("    \"\(screen.localizedName)\": \(Self.f(ratio)) device px per art px \(crisp ? "(crisp)" : "!! NOT AN INTEGER — art will shimmer")")
         }
 
-        if options.renderTest {
-            RenderTest.run(spriteSet: set, scale: config.scale)
+        // [M11] One profile for now; M11d turns this into `config.pets`.
+        let profiles = [PetProfile(name: nil, color: config.color, userName: config.userName)]
+        pets = profiles.enumerated().map { index, profile in
+            let pet = Pet(index: index, profile: profile, spriteSet: set,
+                          size: size, speed: CGFloat(config.speed))
+            // SPEC §5: a sheet that does not slice into the frames it declares is fatal and
+            // loud. Checked per pet, because each one slices the sheet for itself.
+            let sliced = pet.view.sliceCount(for: .walk)
+            if sliced != m.frameCount {
+                print("  !! FATAL: pet \(index) sliced \(sliced) frames but the walk sheet"
+                      + " declares \(m.frameCount)")
+                exit(1)
+            }
+            // [M10] The pet becomes clickable from here on. The window still ignores mouse
+            // events by default; the interaction only switches that on while the cursor is
+            // actually over the cat, so the Dock keeps every other click.
+            pet.interaction.delegate = self
+            // [M11] A self-test must not consume the once-a-day dedication or swap in a
+            // birthday greeting — see PetInteraction.isSelfTest.
+            pet.interaction.isSelfTest = options.isSelfTest
+            pet.interaction.attach(to: pet.view, in: pet.window)
+            pet.applyBehaviorState(pet.behavior.state, spriteSet: set)
+            print("  pet \(index)            : \(pet.profile.name ?? "unnamed"), "
+                  + "\(pet.profile.palette.displayName) coat, \(sliced) walk frames")
+            return pet
         }
 
-        let view = PetView(frame: NSRect(origin: .zero, size: petSize), spriteSet: set)
-        if view.sliceCount(for: .walk) != m.frameCount {
-            print("  !! FATAL: sliced \(view.sliceCount(for: .walk)) frames but the walk sheet declares \(m.frameCount)")
-            exit(1)
-        }
-        self.petView = view
-        let window = PetWindow(contentRect: NSRect(origin: .zero, size: petSize), content: view)
-        self.window = window
+        // [M11] After the pets exist, so `--render-test` can address them by index: a test
+        // that can only see pet 0 would pass while a second cat is broken.
+        if options.renderTest { runRenderTest(set: set) }
 
-        // [M10] The pet becomes clickable from here on. The window still ignores mouse
-        // events by default; the interaction only switches that on while the cursor is
-        // actually over the cat, so the Dock keeps every other click.
-        interaction.delegate = self
-        // [M11] A self-test must not consume the once-a-day dedication or swap in a
-        // birthday greeting — see PetInteraction.isSelfTest.
-        interaction.isSelfTest = options.isSelfTest
-        interaction.attach(to: view, in: window)
         print("  click menu       : \(PetPrompt.allCases.count) prompts, greeting "
               + (effectiveUserName.map { "\"\($0)\"" } ?? "nobody by name"))
 
@@ -388,15 +400,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // --- speed ---
         window.simulate(speed: 60)
         check(config.speed == 60, "the speed slider updates the config", "got \(config.speed)")
-        check(walker.speed == 60, "and reaches the walker immediately", "got \(walker.speed)")
+        check(pets.allSatisfy { $0.walker.speed == 60 },
+              "and reaches every pet's walker immediately",
+              "got \(pets.map { $0.walker.speed })")
 
         // --- scale rebuilds the sprite at a new size ---
         let frameWidth = spriteFrameSize.width
         window.simulate(scale: 3)
         check(config.scale == 3, "the size popup updates the config")
-        check(petSize.width == frameWidth * 3,
-              "and the pet is rebuilt at the new scale",
-              "expected \(frameWidth * 3) pt wide, got \(petSize.width)")
+        check(pets.allSatisfy { $0.size.width == frameWidth * 3 },
+              "and every pet is rebuilt at the new scale",
+              "expected \(frameWidth * 3) pt wide, got \(pets.map { $0.size.width })")
         check(window.contentView != nil, "the window survives a rebuild")
 
         // --- coat colour ---
@@ -484,279 +498,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         exit(0)
     }
 
-    /// Drives the menu bar item's pause/resume path and checks the consequences.
-    private func runMenuTest() -> Never {
-        var failures = 0
-        var checks = 0
-        func check(_ passed: Bool, _ what: String, _ detail: @autoclosure () -> String = "") {
-            checks += 1
-            if passed { print("  ok    \(what)") }
-            else { failures += 1; print("  FAIL  \(what)\(detail().isEmpty ? "" : " — \(detail())")") }
-        }
-
-        print("MenuTest")
-        check(menuBarItem != nil, "status item was created")
-        check(menuBarItem?.iconDescription == "cat.fill symbol",
-              "the menu bar icon is the cat symbol, not the text fallback",
-              "got \(menuBarItem?.iconDescription ?? "nil")")
-        check(!isPaused, "starts unpaused")
-
-        let running = statusSummary
-        check(!running.isEmpty && running != "Paused", "status summary describes the pet",
-              "got \"\(running)\"")
-        let wasVisible = window?.isVisible ?? false
-
-        setPaused(true)
-        check(isPaused, "pause takes effect")
-        check(statusSummary == "Paused", "status summary reports Paused", "got \"\(statusSummary)\"")
-        check(suspensionReason() == .paused, "suspension reason is 'paused'",
-              "got \(String(describing: suspensionReason()))")
-        check(animationTimer == nil, "animation timer is suspended, not merely idle")
-        check(window?.isVisible == false, "the pet is hidden while paused")
-        check(locatorTimer?.isValid == true, "the 500 ms locator poll keeps running so resume works")
-
-        setPaused(false)
-        check(!isPaused, "resume takes effect")
-        check(statusSummary != "Paused", "status summary stops reporting Paused")
-        if wasVisible {
-            check(window?.isVisible == true, "the pet comes back after resuming")
-            check(animationTimer != nil, "and the animation timer restarts")
-        }
-
-        // --- reload ---------------------------------------------------------------
-        check(!spriteSummary.isEmpty && spriteSummary != "No sheets loaded",
-              "sprite summary lists the loaded sheets", "got \"\(spriteSummary)\"")
-
-        // Prove reload genuinely re-reads config rather than no-opping: corrupt the live
-        // value first and check it comes back from disk.
-        walker.speed = 999
-        let sizeBefore = petSize
-        reload()
-        check(walker.speed == CGFloat(config.speed),
-              "reload re-reads config.json and reapplies speed",
-              "speed is \(walker.speed), config says \(config.speed)")
-        check(spriteSet != nil, "reload leaves a sprite set loaded")
-        check(petView != nil, "reload rebuilds the pet view")
-        check(petSize == sizeBefore, "reload keeps the pet size when nothing changed",
-              "\(sizeBefore) -> \(petSize)")
-        check(window?.contentView === petView, "the rebuilt view is installed in the window")
-        check(reloadSignalSource != nil, "SIGHUP reload handler is installed")
-
-        print("")
-        if failures > 0 { print("\(failures) of \(checks) checks FAILED"); exit(1) }
-        print("all \(checks) checks passed")
-        exit(0)
-    }
-
-    /// [M10] Drives a click on the pet and checks what comes back.
-    ///
-    /// The parts that can be checked without a screen are already covered by the test
-    /// executable — Phrasebook picks the words, BubbleGeometry places the bubble, AlphaMask
-    /// decides what counts as a click. What is left is the wiring, and the wiring needs a
-    /// real window with a real sprite in it, which is what this is. SPEC §9: the claims
-    /// below are all readable from the log.
-    private func runInteractionTest() -> Never {
-        var failures = 0
-        var checks = 0
-        func check(_ passed: Bool, _ what: String, _ detail: @autoclosure () -> String = "") {
-            checks += 1
-            if passed { print("  ok    \(what)") }
-            else { failures += 1; print("  FAIL  \(what)\(detail().isEmpty ? "" : " — \(detail())")") }
-        }
-        func settle(_ seconds: TimeInterval) {
-            RunLoop.main.run(until: Date().addingTimeInterval(seconds))
-        }
-
-        print("InteractionTest")
-
-        guard let view = petView, let petWindow = window else {
-            print("  FAIL  the pet view and window exist")
-            exit(1)
-        }
-
-        // --- hit testing ----------------------------------------------------------
-        // The cat is drawn feet-down and centred, so the middle of the frame is art and
-        // the top corners are the empty space above its ears.
-        let middle = NSPoint(x: view.bounds.midX, y: view.bounds.midY)
-        check(view.isOverSprite(middle), "the middle of the frame is the cat",
-              "frame is \(Self.f(view.bounds))")
-
-        // Printed unconditionally: the two checks below are about *where* the art is, and
-        // when one fails this is the only thing that says why.
-        print("  the clickable cat (# art, + tolerance, . click-through):")
-        for line in view.silhouetteDescription().split(separator: "\n") {
-            print("        \(line)")
-        }
-
-        // Nothing is assumed about the art: the shipped cat leaves its corners empty, but
-        // the generated placeholder sheet is a solid block, and a check that passes or
-        // fails on which sheet loaded would be worse than none.
-        if let through = view.clickThroughSample() {
-            check(!view.isOverSprite(through),
-                  "the empty space around the cat is not — this is what leaves the Dock its clicks",
-                  "at \(Self.f(through.x)),\(Self.f(through.y))")
-            check(view.hitTest(view.convert(through, to: view.superview)) == nil,
-                  "and the view declines to handle a click there")
-        } else {
-            print("  note  this sheet fills its whole frame, so there is no transparent "
-                  + "margin to fall through — clicks in the frame all belong to the pet")
-        }
-
-        // Outside the window is always somebody else's click, whatever the art looks like.
-        let outside = NSPoint(x: view.bounds.maxX + 10, y: view.bounds.midY)
-        check(!view.isOverSprite(outside), "a point outside the pet's frame is never the cat")
-
-        // --- the cursor ------------------------------------------------------------
-        // The cursor is the only hint that the cat is clickable at all, and it is the one
-        // part of this feature that cannot be checked by looking at a screenshot: the
-        // pointer is not in the picture. So the decision is checked directly.
-        check(view.cursor(at: middle) == .pointingHand,
-              "the cursor over the cat is a pointing hand, so the cat looks clickable")
-
-        if let through = view.clickThroughSample() {
-            check(view.cursor(at: through) == .arrow,
-                  "and goes back to an arrow over the space the Dock still owns")
-        }
-
-        // The cursor must agree with the hit test everywhere, not just at two points: a
-        // pointing hand over a spot that does not take clicks is a worse lie than no
-        // cursor change at all.
-        var disagreements = 0
-        for row in 0..<32 {
-            for column in 0..<32 {
-                let point = NSPoint(x: view.bounds.width * (CGFloat(column) + 0.5) / 32,
-                                    y: view.bounds.height * (CGFloat(row) + 0.5) / 32)
-                let saysClickable = view.cursor(at: point) == .pointingHand
-                if saysClickable != view.isOverSprite(point) { disagreements += 1 }
-            }
-        }
-        check(disagreements == 0,
-              "the cursor promises exactly what the hit test delivers, across the frame",
-              "\(disagreements) of 1024 sampled points disagree")
-
-        // A tracking area is what makes any of this work for a window that can never be
-        // key (SPEC §3). Without `.activeAlways` the system would only update the cursor
-        // for the active app, which DockPet never is.
-        if let area = view.cursorTrackingArea {
-            check(area.options.contains(.activeAlways),
-                  "the tracking area is active even though the app never is")
-            check(area.options.contains(.cursorUpdate),
-                  "and asks for cursor updates")
-            check(view.trackingAreas.contains(area), "and is actually installed on the view")
-        } else {
-            check(false, "the pet view has a cursor tracking area")
-        }
-
-        // A click-through window that never switches on is a cat you cannot click; one that
-        // never switches off is a Dock you cannot use. Both directions are checked.
-        check(petWindow.ignoresMouseEvents,
-              "the window ignores mouse events while the cursor is elsewhere")
-
-        // --- the prompts ----------------------------------------------------------
-        for prompt in PetPrompt.allCases {
-            interaction.dismissBubble()
-            interaction.say(prompt)
-            settle(0.25)
-
-            guard let reply = interaction.lastReply, let bubble = interaction.bubbleFrame else {
-                check(false, "\(prompt.rawValue) produces a reply and a bubble")
-                continue
-            }
-
-            check(!reply.isEmpty && !reply.contains("{name}"),
-                  "\(prompt.rawValue) answers in words, with the name slot filled",
-                  "got \"\(reply)\"")
-            check(interaction.isTalking, "\(prompt.rawValue) leaves the pet talking")
-
-            let pet = petWindow.frame
-            check(bubble.minY >= pet.maxY,
-                  "\(prompt.rawValue): the bubble sits above the cat, not over it",
-                  "bubble \(Self.f(bubble)) vs pet \(Self.f(pet))")
-
-            if let screen = currentLocation?.screen {
-                let vf = screen.visibleFrame
-                check(bubble.minX >= vf.minX && bubble.maxX <= vf.maxX
-                      && bubble.maxY <= vf.maxY,
-                      "\(prompt.rawValue): the bubble is fully on screen",
-                      "bubble \(Self.f(bubble)) vs visibleFrame \(Self.f(vf))")
-            }
-
-            check(!behavior.state.isMoving,
-                  "\(prompt.rawValue): the pet stops walking while it talks",
-                  "state is \(behavior.state.rawValue)")
-        }
-
-        // --- the nap is the one prompt that changes what the pet does afterwards ---
-        interaction.dismissBubble()
-        interaction.say(.nap)
-        settle(0.2)
-        check(behavior.state == .sleep, "\"Take a nap\" actually puts the pet to sleep",
-              "state is \(behavior.state.rawValue)")
-
-        // --- the name -------------------------------------------------------------
-        let originalConfig = config
-        applyConfig(PetConfig(speed: config.speed, scale: config.scale, screen: config.screen,
-                              menuBarIcon: config.menuBarIcon, color: config.color,
-                              userName: "Testcat"), persist: false)
-        check(effectiveUserName == "Testcat", "a configured name is the one the pet uses",
-              "got \(String(describing: effectiveUserName))")
-
-        var sawTheName = false
-        for _ in 0..<12 {
-            interaction.dismissBubble()
-            interaction.say(.hello)
-            if interaction.lastReply?.contains("Testcat") == true { sawTheName = true; break }
-        }
-        check(sawTheName, "and it reaches the bubble", "last was \"\(interaction.lastReply ?? "")\"")
-
-        applyConfig(originalConfig, persist: false)
-        check(config == originalConfig, "the test restored your original settings")
-
-        // --- the bubble goes away on its own --------------------------------------
-        interaction.dismissBubble()
-        interaction.say(.hello)
-        settle(0.2)
-        check(interaction.isTalking, "the bubble is up")
-        let staysUp = BubbleGeometry.readingTime(for: interaction.lastReply ?? "")
-        settle(staysUp + 0.6)
-        check(!interaction.isTalking, "and takes itself down again without a second click",
-              "still up after \(Self.f(CGFloat(staysUp)) )s")
-        check(interaction.bubbleFrame == nil, "leaving no window behind")
-
-        // --- a picture of it, since nobody reading this log can see my screen ------
-        if let path = options.shotPath {
-            interaction.say(.hello)
-            settle(0.35)
-            if let bubbleView = interaction.bubbleFrame.flatMap({ _ in
-                    NSApp.windows.compactMap { $0 as? BubbleWindow }.first?.contentView }),
-               let rep = bubbleView.bitmapImageRepForCachingDisplay(in: bubbleView.bounds) {
-                bubbleView.cacheDisplay(in: bubbleView.bounds, to: rep)
-                if let png = rep.representation(using: .png, properties: [:]) {
-                    try? png.write(to: URL(fileURLWithPath: path))
-                    print("  shot  wrote \(path) (\(Int(bubbleView.bounds.width))x\(Int(bubbleView.bounds.height)) pt)")
-                } else {
-                    check(false, "the bubble could be encoded to PNG")
-                }
-            } else {
-                check(false, "the bubble could be rendered offscreen")
-            }
-            interaction.dismissBubble()
-        }
-
-        print("")
-        if failures > 0 { print("\(failures) of \(checks) checks FAILED"); exit(1) }
-        print("all \(checks) checks passed")
-        exit(0)
-    }
-
     func applicationWillTerminate(_ notification: Notification) {
         locatorTimer?.invalidate()
         animationTimer?.invalidate()
         verboseTimer?.invalidate()
         // [M10] A global event monitor outlives the object that installed it; leaving one
-        // registered during teardown is a callback into a half-dead app.
-        interaction.stopMouseTracking()
-        interaction.dismissBubble()
+        // registered during teardown is a callback into a half-dead app. Every pet has one.
+        for pet in pets {
+            pet.interaction.stopMouseTracking()
+            pet.interaction.dismissBubble()
+        }
     }
 
     // MARK: - Timers
@@ -799,7 +550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     // MARK: - Locator poll (500 ms)
 
     private func poll() {
-        guard let window = window else { return }
+        guard !pets.isEmpty else { return }
 
         // Real elapsed time, not the nominal interval: the timer can be late.
         let now = CACurrentMediaTime()
@@ -815,7 +566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
         if paused {
             currentLocation = nil
-            if window.isVisible { window.orderOut(nil) }
+            for pet in pets where pet.window.isVisible { pet.window.orderOut(nil) }
             suspendAnimation()
             logAnimation("suspended — \(AnimationSuspension.paused.rawValue)")
             return
@@ -828,37 +579,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             onboarding?.markGranted()
             currentLocation = location
 
-            // The behaviour clock only runs while the pet is actually on screen — a pet
-            // that spent the last hour dormant should not wake up mid-nap. Advanced here
-            // rather than on the animation timer because this timer is the one that always
-            // runs; the animation timer is suspended for three of the four states.
-            let previousState = behavior.state
-            // [M10] The behaviour clock stops while the pet is talking, so it holds the
-            // pose it answered in rather than wandering out from under its own sentence.
-            let state = interaction.isTalking ? previousState : behavior.advance(by: dt)
-            if state != previousState {
-                logLocation("\(state.rawValue) on \(location.screen.localizedName)")
-                applyBehaviorState(state)
-            }
-            // [M10] Also here, not only on the animation tick: that timer is suspended
-            // for three of the four states (SPEC §6), so a sitting or sleeping cat would
-            // depend entirely on the mouse monitor to become clickable. This poll always
-            // runs, which caps how long the cat can be wrongly click-through at 500 ms.
-            interaction.updateClickThrough()
+            for pet in pets {
+                // The behaviour clock only runs while the pet is actually on screen — a
+                // pet that spent the last hour dormant should not wake up mid-nap.
+                // Advanced here rather than on the animation timer because this timer is
+                // the one that always runs; the animation timer is suspended for three of
+                // the four states.
+                let (previous, state) = pet.advanceBehavior(by: dt)
+                if state != previous {
+                    logLocation("pet \(pet.index): \(state.rawValue) on"
+                                + " \(location.screen.localizedName)")
+                    pet.applyBehaviorState(state, spriteSet: spriteSet)
+                }
+                // [M10] Also here, not only on the animation tick: that timer is suspended
+                // for three of the four states (SPEC §6), so a sitting or sleeping cat
+                // would depend entirely on the mouse monitor to become clickable. This poll
+                // always runs, which caps how long the cat can be wrongly click-through at
+                // 500 ms.
+                pet.interaction.updateClickThrough()
 
-            // The strip may have changed shape since the last poll; make sure the pet is
-            // still standing on it before the next animation frame moves it.
-            walker.clamp(to: Geometry.maximumDistance(for: petSize, on: location.strip))
-            position(in: window, on: location.strip)
-            if !window.isVisible {
-                window.orderFront(nil)   // SPEC §3: never makeKeyAndOrderFront
+                // The strip may have changed shape since the last poll; make sure the pet
+                // is still standing on it before the next animation frame moves it.
+                pet.walker.clamp(to: Geometry.maximumDistance(for: pet.size, on: location.strip))
+                pet.position(on: location.strip)
+                if !pet.window.isVisible {
+                    pet.window.orderFront(nil)   // SPEC §3: never makeKeyAndOrderFront
+                }
             }
 
         case .absent(let reason):
             currentLocation = nil
-            if window.isVisible {
-                window.orderOut(nil)
-            }
+            for pet in pets where pet.window.isVisible { pet.window.orderOut(nil) }
             logLocation("dormant — \(reason.rawValue)")
         }
 
@@ -866,17 +617,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     }
 
     /// SPEC §6's suspension conditions, in priority order.
-    private func suspensionReason() -> AnimationSuspension? {
+    ///
+    /// [M6] Suspend when there is nothing to animate: the pet is stationary AND its state
+    /// has no multi-frame sheet of its own. With a sit or sleep animation supplied, the
+    /// timer keeps running so that animation plays — the pet simply does not move. Same
+    /// reasoning as SPEC §6's listed conditions: never run a 12 fps timer to redraw an
+    /// unchanged frame.
+    ///
+    /// [M11] That test is now "every pet", not "the pet". One walking cat keeps the timer
+    /// alive for both, which is correct — and it is why the measured one-third idle figure
+    /// from M6 does not survive a second cat (§6 [M11] amendment). `allSatisfy` on an empty
+    /// array is `true`, which suspends: no pets is nothing to animate.
+    func suspensionReason() -> AnimationSuspension? {
         if paused { return .paused }
         if currentLocation == nil { return .dockNotLocated }
-        // [M6] Suspend when there is nothing to animate: the pet is stationary AND this
-        // state has no multi-frame sheet of its own. With a sit or sleep animation
-        // supplied, the timer keeps running so that animation plays — the pet simply does
-        // not move. Same reasoning as SPEC §6's listed conditions: never run a 12 fps timer
-        // to redraw an unchanged frame.
-        if !behavior.state.isMoving && !(spriteSet?.isAnimated(behavior.state) ?? false) {
-            return .stationary
-        }
+        if pets.allSatisfy({ $0.isStationary(spriteSet: spriteSet) }) { return .stationary }
         if ProcessInfo.processInfo.isLowPowerModeEnabled { return .lowPowerMode }
         return nil
     }
@@ -894,7 +649,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     // MARK: - Animation (12 fps)
 
     private func animationTick() {
-        guard let window = window, let location = currentLocation else { return }
+        guard !pets.isEmpty, let location = currentLocation else { return }
 
         // SPEC §7 M3: recomputed against the live strip every tick, never a cached one.
         // Only the screen reference is carried over from the poll; its geometry is re-read
@@ -913,41 +668,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         let dt = now - lastAnimationTime
         lastAnimationTime = now
 
-        // [M6] Only walking moves the pet. A sit or sleep animation still plays below.
-        if behavior.state.isMoving {
-            walker.advance(by: dt, maxDistance: Geometry.maximumDistance(for: petSize, on: strip))
-            // SPEC §5: flip horizontally for the return trip rather than shipping mirrored art.
-            petView?.facing = walker.direction == .forward ? .right : .left
+        // [M11] One timer, every pet. SPEC §6: a second cat must not double the app's
+        // wakeups — only the work done inside a wakeup.
+        for pet in pets {
+            pet.advanceAnimation(by: dt, on: strip, spriteSet: spriteSet)
         }
-        position(in: window, on: strip)
-
-        // The sheet plays at its own fps, independent of this timer's rate.
-        sequencer.advance(by: dt)
-        petView?.frameIndex = sequencer.index
-
-        // [M10] Two things move the cat relative to the cursor: the cursor, which the
-        // interaction's own mouse monitor catches, and the cat, which is this. The bubble
-        // follows for the same reason — the Dock can be resized mid-sentence.
-        interaction.updateClickThrough()
-        if interaction.isTalking { interaction.positionBubble() }
-    }
-
-    /// [M6] Swap to a state's sheet and restart its cycle from the top rather than
-    /// resuming mid-stride.
-    ///
-    /// [M10] Called from the poll when the behaviour machine changes state on its own, and
-    /// from `interactionForcePetState` when a click changes it instead.
-    private func applyBehaviorState(_ state: PetState) {
-        let sheet = spriteSet?.sheet(for: state)
-        sequencer = FrameSequencer(frameCount: sheet?.metadata.frameCount ?? 1,
-                                   fps: sheet?.metadata.fps ?? 1)
-        petView?.state = state
-        petView?.frameIndex = 0
-    }
-
-    private func position(in window: PetWindow, on strip: WalkStrip) {
-        let frame = Geometry.petFrame(size: petSize, on: strip, distance: walker.distance)
-        window.setFrame(frame, display: true)
     }
 
     // MARK: - Logging
@@ -968,25 +693,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// SPEC §6: once per second under `--verbose`.
     private func logSnapshot() {
         var line = "[verbose] "
-        let frame = window?.frame ?? .zero
         let suspension = suspensionReason()
 
+        // The stage: everything the pets share. Per-pet facts go on the lines below —
+        // [M11], SPEC §9: two cats that cannot be told apart in the log cannot be debugged.
         if let location = currentLocation {
             let vf = location.screen.visibleFrame
             let strip = location.strip
 
-            // The positional claim, stated as a boolean so success is checkable from the
-            // log alone (SPEC §9 — you cannot see my screen, and I cannot see yours).
-            let restsOnEdge: Bool
-            switch strip.edge {
-            case .bottom: restsOnEdge = abs(frame.minY - strip.baseline) < 0.001
-            case .left:   restsOnEdge = abs(frame.minX - strip.baseline) < 0.001
-            case .right:  restsOnEdge = abs(frame.maxX - strip.baseline) < 0.001
-            }
-            let onStrip = walker.distance >= 0
-                && walker.distance <= Geometry.maximumDistance(for: petSize, on: strip) + 0.001
-
             line += "state=\(suspension == nil ? "walking" : "suspended")"
+            line += " pets=\(pets.count)"
             line += " screen=\"\(location.screen.localizedName)\""
             line += " scale=\(Self.f(location.screen.backingScaleFactor))"
             line += " visibleFrame=\(Self.f(vf))"
@@ -995,24 +711,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             line += " strip=[\(Self.f(strip.start))...\(Self.f(strip.end))]"
             line += " tiles=" + (location.tiles.map { "[\(Self.f($0.minX))...\(Self.f($0.maxX))]" }
                                  ?? "unmeasured")
-            line += " distance=\(Self.f(walker.distance))/\(Self.f(Geometry.maximumDistance(for: petSize, on: strip)))"
-            line += " dir=\(walker.direction == .forward ? "forward" : "backward")"
-            line += " window=\(Self.f(frame))"
-            line += " restsOnDockEdge=\(restsOnEdge)"
-            line += " onStrip=\(onStrip)"
-            line += " visible=\(window?.isVisible ?? false)"
-            line += " behavior=\(behavior.state.rawValue)"
-            line += " sheet=\((spriteSet?.hasOwnSheet(for: behavior.state) ?? false) ? "own" : "walk-fallback")"
-            line += " dwell=\(Self.f(CGFloat(behavior.timeInState)))/\(Self.f(CGFloat(behavior.currentDwell)))s"
-            line += " transitions=\(behavior.transitionCount)"
-            line += " frame=\(sequencer.index)/\(sequencer.frameCount)"
-            line += " facing=\(petView?.facing == .left ? "left" : "right")"
-            if !restsOnEdge { line += "  !! WINDOW IS NOT ON THE DOCK EDGE" }
-            if !onStrip { line += "  !! PET HAS LEFT THE STRIP" }
         } else {
             line += "state=dormant"
+            line += " pets=\(pets.count)"
             line += " dockOnScreen=\(DockLocator.isDockOnScreen())"
-            line += " visible=\(window?.isVisible ?? false)"
             // Shown anyway: under autohide this is unchanged, which is exactly the trap
             // that makes the presence check necessary (PROBE.md F4).
             if let main = NSScreen.screens.first {
@@ -1022,20 +724,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
         // No Dock rect is logged: SPEC §4b [M0] uses the window list for presence only and
         // never reads its bounds, so there is no second coordinate space in play.
-        // [M10] Clicking is invisible in a log otherwise: whether the window is currently
-        // accepting mouse events is the whole difference between a clickable cat and a
-        // Dock that has stopped responding, and it changes as the cursor moves.
-        line += " takesClicks=\(window?.ignoresMouseEvents == false)"
-        line += " talking=\(interaction.isTalking)"
-        if let reply = interaction.lastReply, interaction.isTalking {
-            line += " saying=\"\(reply)\""
-            line += " bubble=\(interaction.bubbleFrame.map { Self.f($0) } ?? "none")"
-        }
         line += " locatorTimer=\(locatorTimer?.isValid == true ? "active" : "invalid")"
         line += " animationTimer=\(animationTimer == nil ? "suspended" : "active(\(Int(Self.animationFPS))fps)")"
         line += " suspendReason=\(suspension?.rawValue ?? "none")"
         line += " lowPower=\(ProcessInfo.processInfo.isLowPowerModeEnabled)"
         print(line)
+
+        for pet in pets { print(petSnapshot(pet, on: currentLocation?.strip)) }
+    }
+
+    /// [M11] One line per pet, indented under the stage line. Everything here is a fact
+    /// about *this* cat, and every claim is stated so it can be checked from the log alone
+    /// (SPEC §9 — you cannot see my screen, and I cannot see yours).
+    private func petSnapshot(_ pet: Pet, on strip: WalkStrip?) -> String {
+        let frame = pet.window.frame
+        var line = "  pet \(pet.index)"
+        if let name = pet.profile.name { line += " (\(name))" }
+        line += " coat=\(pet.profile.color)"
+        line += " behavior=\(pet.behavior.state.rawValue)"
+        line += " sheet=\((spriteSet?.hasOwnSheet(for: pet.behavior.state) ?? false) ? "own" : "walk-fallback")"
+        line += " dwell=\(Self.f(CGFloat(pet.behavior.timeInState)))/\(Self.f(CGFloat(pet.behavior.currentDwell)))s"
+        line += " transitions=\(pet.behavior.transitionCount)"
+        line += " frame=\(pet.sequencer.index)/\(pet.sequencer.frameCount)"
+        line += " facing=\(pet.view.facing == .left ? "left" : "right")"
+        line += " window=\(Self.f(frame))"
+        line += " visible=\(pet.window.isVisible)"
+        // [M10] Clicking is invisible in a log otherwise: whether the window is currently
+        // accepting mouse events is the whole difference between a clickable cat and a
+        // Dock that has stopped responding, and it changes as the cursor moves.
+        line += " takesClicks=\(pet.window.ignoresMouseEvents == false)"
+        line += " talking=\(pet.interaction.isTalking)"
+        if let reply = pet.interaction.lastReply, pet.interaction.isTalking {
+            line += " saying=\"\(reply)\""
+            line += " bubble=\(pet.interaction.bubbleFrame.map { Self.f($0) } ?? "none")"
+        }
+
+        guard let strip = strip else { return line }
+        let maximum = Geometry.maximumDistance(for: pet.size, on: strip)
+
+        let restsOnEdge: Bool
+        switch strip.edge {
+        case .bottom: restsOnEdge = abs(frame.minY - strip.baseline) < 0.001
+        case .left:   restsOnEdge = abs(frame.minX - strip.baseline) < 0.001
+        case .right:  restsOnEdge = abs(frame.maxX - strip.baseline) < 0.001
+        }
+        let onStrip = pet.walker.distance >= 0 && pet.walker.distance <= maximum + 0.001
+
+        line += " distance=\(Self.f(pet.walker.distance))/\(Self.f(maximum))"
+        line += " dir=\(pet.walker.direction == .forward ? "forward" : "backward")"
+        line += " restsOnDockEdge=\(restsOnEdge)"
+        line += " onStrip=\(onStrip)"
+        if !restsOnEdge { line += "  !! WINDOW IS NOT ON THE DOCK EDGE" }
+        if !onStrip { line += "  !! PET HAS LEFT THE STRIP" }
+        return line
     }
 
     // MARK: - Menu bar
@@ -1065,12 +806,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
     var statusSummary: String {
         if paused { return "Paused" }
-        guard let location = currentLocation else {
+        guard let location = currentLocation, let pet = primaryPet else {
             if !DockTiles.isTrusted { return "Waiting for Accessibility" }
             return "Waiting — \(lastLocationDescription ?? "looking for the Dock")"
         }
         let verb: String
-        switch behavior.state {
+        switch pet.behavior.state {
         case .walk:  verb = "Walking"
         case .idle:  verb = "Standing"
         case .sit:   verb = "Sitting"
@@ -1122,7 +863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     ///
     /// `rebuildSprites` is skipped by `reload()`, which reloads the sheets itself straight
     /// afterwards and would otherwise rebuild the view twice.
-    private func applyConfig(_ newConfig: PetConfig, persist: Bool, rebuildSprites: Bool = true) {
+    func applyConfig(_ newConfig: PetConfig, persist: Bool, rebuildSprites: Bool = true) {
         let previous = config
         // [M11] Guarded the same way as the launch-time call: a self-test must not rewrite
         // the user's real login item as a side effect of checking something else.
@@ -1131,7 +872,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         }
         config = newConfig
 
-        walker.speed = CGFloat(config.speed)
+        // Speed describes the stage rather than an actor, so every pet gets it.
+        for pet in pets { pet.walker.speed = CGFloat(config.speed) }
         locator.pinnedScreenName = config.screen
 
         if rebuildSprites, config.color != previous.color {
@@ -1194,12 +936,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
     /// A click changed what the pet is doing. Unlike the poll's own transitions this can
     /// happen at any moment, so the sheet swap and the timer decision are both redone here.
+    ///
+    /// [M11] Applied to `primaryPet`, which is the only pet there is until M11d adds the
+    /// second. The protocol gains a pet at the same time this becomes ambiguous.
     func interactionForcePetState(_ state: PetState) {
-        let previous = behavior.state
-        behavior.force(state)
-        if behavior.state != previous {
-            applyBehaviorState(behavior.state)
-            logLocation("\(behavior.state.rawValue) (asked for it)")
+        guard let pet = primaryPet else { return }
+        let previous = pet.behavior.state
+        pet.behavior.force(state)
+        if pet.behavior.state != previous {
+            pet.applyBehaviorState(pet.behavior.state, spriteSet: spriteSet)
+            logLocation("pet \(pet.index): \(pet.behavior.state.rawValue) (asked for it)")
         }
         updateAnimationState()
     }
@@ -1259,28 +1005,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         }
     }
 
-    /// Swap in a new sprite set, keeping the pet's current state and heading.
+    /// Swap in a new sprite set, keeping each pet's current state and heading.
     private func applySprites(_ set: SpriteSet) {
         spriteSet = set
-        petSize = set.walk.metadata.pointSize(scale: config.scale)
+        let size = petSizeFor(set: set)
+        for pet in pets { pet.applySprites(set, size: size) }
+    }
 
-        let sheet = set.sheet(for: behavior.state)
-        sequencer = FrameSequencer(frameCount: sheet.metadata.frameCount, fps: sheet.metadata.fps)
-
-        let view = PetView(frame: NSRect(origin: .zero, size: petSize), spriteSet: set)
-        view.state = behavior.state
-        view.facing = walker.direction == .forward ? .right : .left
-        view.frameIndex = 0
-        petView = view
-
-        // The sheet may be a different size; resize before swapping so the view is not
-        // briefly stretched.
-        window?.setContentSize(petSize)
-        window?.contentView = view
-
-        // [M10] Re-attach: this is a brand new view, and an interaction still pointing at
-        // the old one would leave the cat unclickable with nothing on screen to say why.
-        if let window = window { interaction.attach(to: view, in: window) }
+    /// The window size for a sheet at the configured scale. Every pet is the same size —
+    /// `scale` is global, because it describes the stage rather than an actor.
+    ///
+    /// Derived from the sheet, never hardcoded (SPEC §5).
+    private func petSizeFor(set: SpriteSet) -> CGSize {
+        set.walk.metadata.pointSize(scale: config.scale)
     }
 
     private func applyMenuBarVisibility() {
@@ -1321,9 +1058,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
     // MARK: - Formatting
 
-    private static func f(_ v: CGFloat) -> String { String(format: "%.1f", Double(v)) }
+    static func f(_ v: CGFloat) -> String { String(format: "%.1f", Double(v)) }
 
-    private static func f(_ r: CGRect) -> String {
+    static func f(_ r: CGRect) -> String {
         "(\(f(r.origin.x)),\(f(r.origin.y)) \(f(r.width))x\(f(r.height)))"
     }
 
