@@ -35,18 +35,21 @@ enum DockTiles {
         return AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
     }
 
-    /// The Dock's tile bounds on `screen`, in AppKit coordinates, or nil if they cannot
-    /// be measured right now.
+    /// Everything one Accessibility read of the Dock produces, before anybody decides what
+    /// to do with it: the dock items, the band that filters them, and the primary frame
+    /// their coordinates flip against.
     ///
-    /// Returns the union of the individual dock-item frames rather than the enclosing
-    /// `AXList` rect: the list element is padded well beyond the tiles it holds, and the
-    /// union is the only value that tracks what is actually drawn.
+    /// Factored out because `measure`, `tileFrames` and `inspect` were all doing the same
+    /// four guards and the same tree walk, and the two that existed first had already
+    /// drifted apart in how they spelled the guards. Three copies of a walk this fiddly is
+    /// three places for the band filter to be forgotten.
     ///
-    /// Items are kept only if they sit inside the Dock's own band — the strip between
-    /// `frame` and `visibleFrame` on the Dock's edge. That filter is what excludes an open
-    /// stack's popup, whose items float above the Dock and would otherwise stretch the
-    /// measurement across half the screen.
-    static func measure(on screen: NSScreen) -> CGRect? {
+    /// Returning nil is the "no measurement" answer and it must keep meaning exactly what
+    /// it meant before: no grant (the normal state, since SPEC §4c makes Accessibility
+    /// opt-in), no Dock process, no Dock inset on this screen, or no primary screen. Every
+    /// caller degrades on nil, so nothing here is load-bearing.
+    private static func survey(on screen: NSScreen)
+        -> (items: [AXUIElement], band: CGRect, primaryFrame: CGRect)? {
         guard isTrusted else { return nil }
         guard let dock = NSRunningApplication
             .runningApplications(withBundleIdentifier: "com.apple.dock").first else { return nil }
@@ -54,20 +57,49 @@ enum DockTiles {
         guard let primaryFrame = NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame
         else { return nil }
 
-        let app = AXUIElementCreateApplication(dock.processIdentifier)
-
-        var union: CGRect?
-        for item in dockItems(under: app, depth: 0) {
-            guard let cg = frame(of: item) else { continue }
-            let appKit = Geometry.flipCGToAppKit(cg, primaryFrame: primaryFrame)
-            guard !appKit.isEmpty, appKit.intersects(band) else { continue }
-            union = union.map { $0.union(appKit) } ?? appKit
-        }
-        return union
+        let items = dockItems(under: AXUIElementCreateApplication(dock.processIdentifier),
+                              depth: 0)
+        return (items, band, primaryFrame)
     }
 
-    /// One dock item, for `--dock-bounds` to print. Diagnostics only — `measure` needs
-    /// nothing but the frames.
+    /// The frame of every in-band dock item on `screen`, in AppKit coordinates and in Dock
+    /// order, or nil if the Dock cannot be measured right now.
+    ///
+    /// Items are kept only if they sit inside the Dock's own band, the strip between
+    /// `frame` and `visibleFrame` on the Dock's edge. That filter is what excludes an open
+    /// stack's popup, whose items float above the Dock and would otherwise stretch the
+    /// measurement across half the screen.
+    ///
+    /// Nil and `[]` are different answers and both are normal. Nil means there was no
+    /// measurement to be had, which is what an ungranted app gets every time. An empty
+    /// array means the Dock was read successfully and nothing survived the band filter,
+    /// which is what an empty Dock looks like. `measure` collapses both to nil because a
+    /// union of nothing is nothing; [M13] `NapSpot` wants the individual frames, which is
+    /// why they are exposed rather than only their union.
+    static func tileFrames(on screen: NSScreen) -> [CGRect]? {
+        guard let survey = survey(on: screen) else { return nil }
+
+        return survey.items.compactMap { item in
+            guard let cg = frame(of: item) else { return nil }
+            let appKit = Geometry.flipCGToAppKit(cg, primaryFrame: survey.primaryFrame)
+            guard !appKit.isEmpty, appKit.intersects(survey.band) else { return nil }
+            return appKit
+        }
+    }
+
+    /// The Dock's tile bounds on `screen`, in AppKit coordinates, or nil if they cannot
+    /// be measured right now.
+    ///
+    /// Returns the union of the individual dock-item frames rather than the enclosing
+    /// `AXList` rect: the list element is padded well beyond the tiles it holds, and the
+    /// union is the only value that tracks what is actually drawn.
+    static func measure(on screen: NSScreen) -> CGRect? {
+        guard let frames = tileFrames(on: screen), let first = frames.first else { return nil }
+        return frames.dropFirst().reduce(first) { $0.union($1) }
+    }
+
+    /// One dock item, for `--dock-bounds` to print. Diagnostics only: `measure` and
+    /// `tileFrames` need nothing but the frames.
     struct Item {
         let title: String
         let frame: CGRect
@@ -75,22 +107,20 @@ enum DockTiles {
     }
 
     /// Every dock item with its frame and whether the band filter kept it.
+    ///
+    /// Deliberately not built on `tileFrames`: this one reports the items the filter
+    /// *rejected* too, which is the only way `--dock-bounds` can show that a stack popup
+    /// was correctly thrown away rather than never seen.
     static func inspect(on screen: NSScreen) -> [Item] {
-        guard isTrusted,
-              let dock = NSRunningApplication
-                .runningApplications(withBundleIdentifier: "com.apple.dock").first,
-              let band = band(of: screen),
-              let primaryFrame = NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame
-        else { return [] }
+        guard let survey = survey(on: screen) else { return [] }
 
-        return dockItems(under: AXUIElementCreateApplication(dock.processIdentifier), depth: 0)
-            .map { item in
-                let cg = frame(of: item) ?? .zero
-                let appKit = Geometry.flipCGToAppKit(cg, primaryFrame: primaryFrame)
-                return Item(title: (copy(item, kAXTitleAttribute) as? String) ?? "—",
-                            frame: appKit,
-                            inBand: !appKit.isEmpty && appKit.intersects(band))
-            }
+        return survey.items.map { item in
+            let cg = frame(of: item) ?? .zero
+            let appKit = Geometry.flipCGToAppKit(cg, primaryFrame: survey.primaryFrame)
+            return Item(title: (copy(item, kAXTitleAttribute) as? String) ?? "(untitled)",
+                        frame: appKit,
+                        inBand: !appKit.isEmpty && appKit.intersects(survey.band))
+        }
     }
 
     /// The strip of `screen` the Dock occupies — everything between `frame` and
