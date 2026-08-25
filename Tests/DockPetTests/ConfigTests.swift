@@ -208,5 +208,62 @@ enum ConfigTests {
             let parsed = try! JSONDecoder().decode(PetConfig.self, from: json)
             eq(parsed.launchAtLogin, false, "launchAtLogin round-trips false")
         }
+
+        section("[M11] the pets array")
+
+        do {
+            let json = Data(#"{"pets": [{"name": "Mochi"}]}"#.utf8)
+            let parsed = try! JSONDecoder().decode(PetConfig.self, from: json).validated().config
+            eq(parsed.pets.count, 1, "a pets entry with no color decodes rather than throwing")
+            eq(parsed.pets[0].color, PetConfig.default.color, "and takes the default coat")
+            eq(parsed.pets[0].name, "Mochi", "keeping the key it did supply")
+        }
+
+        do {
+            // The legacy shape: no `pets` key at all. This is my existing config.json and it has
+            // to keep working untouched.
+            let json = Data(#"{"color": "tuxedo", "userName": "Tiago"}"#.utf8)
+            let parsed = try! JSONDecoder().decode(PetConfig.self, from: json).validated().config
+            eq(parsed.pets.count, 1, "no pets key gives exactly one cat")
+            eq(parsed.pets[0].color, "tuxedo", "that cat inherits the legacy color")
+            eq(parsed.pets[0].userName, "Tiago", "and the legacy userName")
+        }
+
+        do {
+            let json = Data(#"{"pets": []}"#.utf8)
+            let parsed = try! JSONDecoder().decode(PetConfig.self, from: json).validated().config
+            eq(parsed.pets.count, 1, "an empty pets array falls back to one cat")
+        }
+
+        do {
+            let json = Data("""
+            {"pets": [{"name": "Mochi", "color": "orange", "userName": "Philippine"},
+                      {"name": "Tigre", "color": "tuxedo"}]}
+            """.utf8)
+            let parsed = try! JSONDecoder().decode(PetConfig.self, from: json).validated().config
+            eq(parsed.pets.count, 2, "two pets are kept")
+            eq(parsed.pets[0].name, "Mochi", "the first keeps its name")
+            eq(parsed.pets[1].color, "tuxedo", "the second keeps its coat")
+            eq(parsed.pets[1].userName, nil, "an absent userName stays absent")
+            eq(parsed.color, "orange", "the legacy color mirrors pet 0")
+            eq(parsed.userName, "Philippine", "the legacy userName mirrors pet 0")
+        }
+
+        do {
+            let json = Data("""
+            {"pets": [{"color": "orange"}, {"color": "grey"}, {"color": "black"}]}
+            """.utf8)
+            let (parsed, corrections) = try! JSONDecoder().decode(PetConfig.self, from: json).validated()
+            eq(parsed.pets.count, 2, "a third cat is dropped — the cap is two")
+            check(corrections.contains { $0.field == "pets" }, "and dropping it is a logged correction")
+        }
+
+        do {
+            let json = Data(#"{"pets": [{"color": "chartreuse"}]}"#.utf8)
+            let (parsed, corrections) = try! JSONDecoder().decode(PetConfig.self, from: json).validated()
+            eq(parsed.pets[0].color, PetConfig.default.color, "an unknown coat falls back to the default")
+            check(corrections.contains { $0.field.hasPrefix("pets[0].color") },
+                  "and says which cat it was")
+        }
     }
 }

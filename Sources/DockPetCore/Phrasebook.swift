@@ -10,7 +10,7 @@ import Foundation
 
 /// The things you can ask the pet for by clicking it.
 public enum PetPrompt: String, CaseIterable {
-    case hello, encourage, fact, nap
+    case hello, encourage, fact, nap, birthday
 
     /// The wording in the click menu.
     public var menuTitle: String {
@@ -19,6 +19,7 @@ public enum PetPrompt: String, CaseIterable {
         case .encourage: return "Encourage me"
         case .fact:      return "Tell me a fact"
         case .nap:       return "Take a nap"
+        case .birthday:  return "It's my birthday!"
         }
     }
 
@@ -85,8 +86,20 @@ public struct Phrasebook {
                 "Napping. This is the job, {name}.",
                 "Five minutes. Or forty.",
             ]
+        case .birthday:
+            return [
+                "Happy birthday, {name}!",
+                "{name}! It's your day. I checked.",
+                "Happy birthday, {name}. I got you a nap. It's for me.",
+                "It's your birthday, {name} — I'm walking extra today.",
+                "Many happy returns, {name}. That's the formal one.",
+            ]
         }
     }
+
+    /// [M11] The birthday pool, reachable directly: on the day, it replaces the `hello`
+    /// pool rather than sitting beside it as a prompt nobody would think to click.
+    public static var birthdayLines: [String] { lines(for: .birthday) }
 
     /// Put `name` into a template — or take the slot out cleanly when there is no name.
     ///

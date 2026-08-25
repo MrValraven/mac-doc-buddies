@@ -42,6 +42,22 @@ public struct PetConfig: Codable, Equatable {
     /// think to relaunch it by hand.
     public var launchAtLogin: Bool
 
+    /// [M11] Every cat on the Dock, capped at two.
+    ///
+    /// `color` and `userName` above are pet 0's, kept in sync by `validated()`. That
+    /// redundancy is deliberate: every existing call site reads `config.color` meaning
+    /// "the cat's coat", and rewriting all of them to `config.pets[0].color` would be a
+    /// large diff whose only effect is to make an existing config.json stop working.
+    public var pets: [PetProfile]
+
+    /// [M11] `"MM-DD"`, or `nil`. On a matching day the greeting pool becomes the birthday
+    /// pool.
+    public var birthday: String?
+
+    /// [M11] One line, said on the first click of the day and then not again until the
+    /// date changes. `nil` means the pet has nothing extra to say.
+    public var dedication: String?
+
     /// The chosen coat, falling back to the default rather than to nothing. `validated()`
     /// has already replaced an unknown id by the time a config is in use; this fallback is
     /// for the un-validated case, where an invisible cat would be the worse answer.
@@ -54,7 +70,8 @@ public struct PetConfig: Codable, Equatable {
     // tiles; the only variable is whether Accessibility has been granted yet.
     public init(speed: Double = 30, scale: Int = 2, screen: String? = nil,
                 menuBarIcon: Bool = true, color: String = "orange",
-                userName: String? = nil, launchAtLogin: Bool = true) {
+                userName: String? = nil, launchAtLogin: Bool = true,
+                pets: [PetProfile] = [], birthday: String? = nil, dedication: String? = nil) {
         self.speed = speed
         self.scale = scale
         self.screen = screen
@@ -62,6 +79,9 @@ public struct PetConfig: Codable, Equatable {
         self.color = color
         self.userName = userName
         self.launchAtLogin = launchAtLogin
+        self.pets = pets
+        self.birthday = birthday
+        self.dedication = dedication
     }
 
     /// Missing keys fall back to the defaults, so a partial config file is valid and a
@@ -77,10 +97,22 @@ public struct PetConfig: Codable, Equatable {
         self.userName = try c.decodeIfPresent(String.self, forKey: .userName)
         self.launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)
             ?? PetConfig.default.launchAtLogin
+        self.pets = try c.decodeIfPresent([PetProfile].self, forKey: .pets) ?? []
+        self.birthday = try c.decodeIfPresent(String.self, forKey: .birthday)
+        self.dedication = try c.decodeIfPresent(String.self, forKey: .dedication)
     }
 
     /// Longest name that still fits in a speech bubble beside a Dock-sized cat.
     public static let maximumNameLength = 32
+
+    /// [M11] Two. §8.5 forbids a plugin system; this is a second hardcoded cat, and a
+    /// third is a feature request rather than a config change.
+    public static let maximumPets = 2
+
+    /// [M11] Longer than this and the bubble stops fitting beside a Dock-sized cat.
+    /// `BubbleGeometry` clamps the bubble to the screen, but a paragraph in a speech
+    /// bubble is not what anyone means by a dedication.
+    public static let maximumDedicationLength = 120
 
     /// What was wrong with a value, and what was used instead.
     public struct Correction: Equatable {
@@ -149,6 +181,99 @@ public struct PetConfig: Codable, Equatable {
             out.screen = nil
         }
 
+        // [M11] `pets` is canonical when present; the legacy keys are canonical when it is
+        // not. Whichever way round, they agree by the time anyone reads them.
+        if out.pets.isEmpty {
+            out.pets = [PetProfile(name: nil, color: out.color, userName: out.userName)]
+        } else {
+            if out.pets.count > Self.maximumPets {
+                corrections.append(Correction(field: "pets",
+                                              given: "\(out.pets.count) cats",
+                                              used: "\(Self.maximumPets)"))
+                out.pets = Array(out.pets.prefix(Self.maximumPets))
+            }
+            for index in out.pets.indices {
+                if let palette = CatPalette.named(out.pets[index].color) {
+                    out.pets[index].color = palette.id
+                } else {
+                    corrections.append(Correction(field: "pets[\(index)].color",
+                                                  given: "\"\(out.pets[index].color)\"",
+                                                  used: PetConfig.default.color))
+                    out.pets[index].color = PetConfig.default.color
+                }
+
+                if let name = out.pets[index].userName {
+                    let tidy = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    out.pets[index].userName = tidy.isEmpty ? nil
+                        : String(tidy.prefix(Self.maximumNameLength))
+                }
+                if let name = out.pets[index].name {
+                    let tidy = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    out.pets[index].name = tidy.isEmpty ? nil
+                        : String(tidy.prefix(Self.maximumNameLength))
+                }
+            }
+            out.color = out.pets[0].color
+            out.userName = out.pets[0].userName
+        }
+
+        // A birthday that does not parse is dropped rather than kept: keeping it means a
+        // config that looks configured and silently never fires.
+        if let birthday, Occasion.parse(birthday) == nil {
+            corrections.append(Correction(field: "birthday", given: "\"\(birthday)\"",
+                                          used: "none"))
+            out.birthday = nil
+        }
+
+        // The dedication shares the speech bubble with everything else, so it gets the
+        // same treatment the name does: trimmed silently, truncated loudly.
+        if let dedication {
+            let tidy = dedication.trimmingCharacters(in: .whitespacesAndNewlines)
+            if tidy.isEmpty {
+                out.dedication = nil
+            } else if tidy.count > Self.maximumDedicationLength {
+                let cut = String(tidy.prefix(Self.maximumDedicationLength))
+                corrections.append(Correction(field: "dedication", given: "\"\(tidy)\"",
+                                              used: "\"\(cut)\""))
+                out.dedication = cut
+            } else {
+                out.dedication = tidy
+            }
+        }
+
         return (out, corrections)
+    }
+}
+
+/// [M11] One cat's identity. Separate from `PetConfig`, which describes the stage —
+/// speed, scale, screen, menu bar — rather than an actor.
+public struct PetProfile: Codable, Equatable {
+    /// What this cat is called. `nil` means it has no name of its own; the meeting lines
+    /// read correctly without one, per the M10 name-slot rule.
+    public var name: String?
+    /// Coat colour, as a `CatPalette` id.
+    public var color: String
+    /// What this cat calls the human.
+    public var userName: String?
+
+    public init(name: String? = nil, color: String = CatPalette.default.id,
+                userName: String? = nil) {
+        self.name = name
+        self.color = color
+        self.userName = userName
+    }
+
+    public var palette: CatPalette { CatPalette.named(color) ?? .default }
+
+    /// Missing keys fall back to defaults, exactly as `PetConfig.init(from:)` does.
+    ///
+    /// Synthesised `Codable` would *throw* on an entry with no `color`, and a throw here
+    /// discards the whole config file — a partial pets entry must cost a clamped value and
+    /// a log line, never the user's settings.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name)
+        self.color = try c.decodeIfPresent(String.self, forKey: .color) ?? CatPalette.default.id
+        self.userName = try c.decodeIfPresent(String.self, forKey: .userName)
     }
 }
