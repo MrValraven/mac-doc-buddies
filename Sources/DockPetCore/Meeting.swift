@@ -66,6 +66,38 @@ public struct MeetingCoordinator {
         public let reply: String
     }
 
+    /// [M12] What a meeting turned out to be.
+    ///
+    /// One type rather than two methods, because a meeting is one or the other and the
+    /// cooldown is spent either way. Two entry points that both stamped the cooldown would
+    /// be two doors into the same room, and the second one to be written would eventually
+    /// forget to close it.
+    public enum Encounter: Equatable {
+        /// A line and its answer, as every meeting was before M12.
+        case chat(Exchange)
+        /// The pair walks together, announces itself with this line, and kisses.
+        case kiss(String)
+
+        /// The words traded, or `nil` for a kiss. Lets a caller that only cares about
+        /// speech stay written the way it was.
+        public var exchange: Exchange? {
+            if case .chat(let exchange) = self { return exchange }
+            return nil
+        }
+
+        public var isKiss: Bool {
+            if case .kiss = self { return true }
+            return false
+        }
+    }
+
+    /// [M12] How often a meeting becomes a kiss, when kissing is switched on.
+    ///
+    /// One in five: often enough to be seen in an afternoon, rare enough that the pair
+    /// still has an ordinary relationship the rest of the time. The cooldown does the real
+    /// rate limiting — at 60 s between meetings this is a kiss every few minutes at most.
+    public static let kissChance = 0.2
+
     /// Starts at the cooldown so the first meeting of a session is not swallowed. A pair
     /// of cats that ignore each other for the first minute after launch looks broken.
     private var sinceLastMeeting: TimeInterval = MeetingCoordinator.cooldown
@@ -93,14 +125,37 @@ public struct MeetingCoordinator {
         sinceLastMeeting += min(dt, BehaviorMachine.maximumStep)
     }
 
-    /// An exchange if these two have just met and the cooldown has elapsed, else `nil`.
+    /// [M12] Spend the cooldown without holding a meeting.
+    ///
+    /// For the kiss asked for from the click menu: it never goes through `meet`, but the
+    /// pair has just spent six seconds nose to nose, and two cats who strike up a
+    /// conversation the instant they stop kissing look like two features fighting over the
+    /// same pair rather than one pair of cats.
+    public mutating func noteMeeting() {
+        sinceLastMeeting = 0
+    }
+
+    /// An encounter if these two have just met and the cooldown has elapsed, else `nil`.
     ///
     /// `openerName` is the cat that speaks first, `replierName` the one that answers —
     /// and each line addresses the *other* one, so the opener renders with `replierName`.
+    ///
+    /// [M12] `kissesAllowed` is the config toggle, passed in rather than read: this type
+    /// knows nothing about where settings live, and a coordinator that consulted a global
+    /// could not be run four hundred times in a test with the answer switched both ways.
+    /// It defaults to off so that a caller which has not thought about kissing gets the
+    /// M11 behaviour rather than a surprise.
     public mutating func meet(_ a: CGRect, _ b: CGRect,
-                              openerName: String?, replierName: String?) -> Exchange? {
+                              openerName: String?, replierName: String?,
+                              kissesAllowed: Bool = false) -> Encounter? {
         guard Self.haveMet(a, b), sinceLastMeeting >= Self.cooldown else { return nil }
         sinceLastMeeting = 0
+
+        // Rolled before the line is picked, and only when kissing is on, so switching the
+        // toggle does not shift which conversations a given seed produces.
+        if kissesAllowed, Double.random(in: 0..<1, using: &rng) < Self.kissChance {
+            return .kiss(Phrasebook.kissLine)
+        }
 
         let pairs = Phrasebook.meetingPairs
         guard !pairs.isEmpty else { return nil }
@@ -114,7 +169,7 @@ public struct MeetingCoordinator {
         }
         lastPairIndex = index
 
-        return Exchange(opener: Phrasebook.render(pairs[index].opener, name: replierName),
-                        reply: Phrasebook.render(pairs[index].reply, name: openerName))
+        return .chat(Exchange(opener: Phrasebook.render(pairs[index].opener, name: replierName),
+                              reply: Phrasebook.render(pairs[index].reply, name: openerName)))
     }
 }

@@ -127,9 +127,16 @@ final class Pet {
     }
 
     /// One animation frame: move if walking, advance the sheet, keep the bubble with us.
-    func advanceAnimation(by dt: TimeInterval, on strip: WalkStrip, spriteSet: SpriteSet?) {
+    ///
+    /// [M12] `moves` is how the kiss borrows a cat. During the approach the app walks both
+    /// pets toward each other itself, and a pet that also took its own step here would
+    /// cover twice the ground and turn round at the ends of the strip on the way — the one
+    /// thing a cat crossing the Dock to meet another must not do. Everything else about the
+    /// frame — the sheet, the bubble, click-through — still happens.
+    func advanceAnimation(by dt: TimeInterval, on strip: WalkStrip, spriteSet: SpriteSet?,
+                          moves: Bool = true) {
         // [M6] Only walking moves the pet. A sit or sleep animation still plays below.
-        if behavior.state.isMoving {
+        if moves, behavior.state.isMoving {
             walker.advance(by: dt, maxDistance: Geometry.maximumDistance(for: size, on: strip))
             // SPEC §5: flip horizontally for the return trip rather than shipping mirrored art.
             view.facing = walker.direction == .forward ? .right : .left

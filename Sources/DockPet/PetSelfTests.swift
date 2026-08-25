@@ -716,4 +716,138 @@ extension AppDelegate {
         print("all \(checks) checks passed")
         exit(0)
     }
+
+    /// [M12] Sends the two cats to each other and follows the kiss to its end.
+    ///
+    /// The phases, the drift and the words are covered by the test executable; what is left
+    /// is the wiring, which needs two real windows on a real Dock. SPEC §9: every claim
+    /// below is one the log can carry, because the sequence takes six seconds of screen and
+    /// leaves nothing behind afterwards.
+    ///
+    /// Like `--dedication-test`, this drives the real app with a temporary config and puts
+    /// the original back before it exits — running the test must not cost you a cat.
+    func runKissTest() -> Never {
+        var failures = 0
+        var checks = 0
+        func check(_ passed: Bool, _ what: String, _ detail: @autoclosure () -> String = "") {
+            checks += 1
+            if passed { print("  ok    \(what)") }
+            else { failures += 1; print("  FAIL  \(what)\(detail().isEmpty ? "" : " — \(detail())")") }
+        }
+        /// Run the real run loop, so the real animation timer drives the real kiss.
+        func settle(_ seconds: TimeInterval) {
+            RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        }
+        /// Wait for a phase, up to a limit. Returns whether it arrived.
+        func waitFor(_ phase: KissRoutine.Phase?, within limit: TimeInterval) -> Bool {
+            let deadline = Date().addingTimeInterval(limit)
+            while Date() < deadline {
+                if kissPhase == phase { return true }
+                settle(0.1)
+            }
+            return kissPhase == phase
+        }
+
+        print("KissTest")
+
+        let originalConfig = config
+
+        // Two cats, kissing on, whatever the real config says. Not persisted: this is a
+        // test run, and it is put back below.
+        var testConfig = originalConfig
+        testConfig.kisses = true
+        if testConfig.pets.count < 2 {
+            let first = testConfig.pets.first ?? PetProfile(name: nil, color: testConfig.color,
+                                                            userName: testConfig.userName)
+            let other = CatPalette.all.first { $0.id != first.color } ?? .default
+            testConfig.pets = [first, PetProfile(name: nil, color: other.id, userName: nil)]
+        }
+        applyConfig(testConfig, persist: false)
+        settle(0.6)   // let the poll place the rebuilt cast
+
+        check(pets.count == 2, "the test has two cats to work with", "got \(pets.count)")
+        guard pets.count == 2 else {
+            print("\n\(failures + 1) of \(checks + 1) checks FAILED")
+            applyConfig(originalConfig, persist: false)
+            exit(1)
+        }
+
+        guard currentLocation != nil else {
+            // Not a failure of the kiss: with no Dock located there is nowhere to walk, and
+            // saying so beats reporting six phantom failures.
+            print("  SKIP  the Dock is not located (grant Accessibility, or unhide the Dock)"
+                  + " — there is no strip to kiss on")
+            applyConfig(originalConfig, persist: false)
+            exit(1)
+        }
+
+        check(interactionCanKiss, "with two cats and kissing on, the menu item is offered")
+
+        // --- the approach ---------------------------------------------------------------
+        let before = pets.map(\.walker.distance)
+        interactionRequestKiss()
+        check(kissPhase == .approach, "asking for a kiss sets both cats walking",
+              "phase \(kissPhase.map { $0.rawValue } ?? "none")")
+        check(!interactionCanKiss, "and a second ask is refused while that one is under way")
+
+        settle(0.8)
+        let closing = zip(before, pets.map(\.walker.distance))
+            .map { abs($0 - $1) }
+        check(closing.contains { $0 > 0 }, "the cats are moving toward each other",
+              "moved \(closing.map { Self.f($0) })")
+
+        // --- the line -------------------------------------------------------------------
+        check(waitFor(.announce, within: KissRoutine.approachCeiling + 1),
+              "they reach each other and one of them speaks",
+              "phase \(kissPhase.map { $0.rawValue } ?? "none")")
+        let talker = pets.first { $0.interaction.isTalking }
+        check(talker != nil, "a bubble is up")
+        check(talker?.interaction.lastReply == Phrasebook.kissLine,
+              "and it says \"\(Phrasebook.kissLine)\"",
+              "got \(talker?.interaction.lastReply ?? "nothing")")
+        check(pets.allSatisfy { $0.behavior.state == .sit }, "both cats have sat down",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+        check(MeetingCoordinator.haveMet(pets[0].window.frame, pets[1].window.frame),
+              "and they are standing against each other")
+
+        // --- the hearts -----------------------------------------------------------------
+        check(waitFor(.kiss, within: KissRoutine.announceDuration + 1), "then they kiss",
+              "phase \(kissPhase.map { $0.rawValue } ?? "none")")
+        check(kissHeartsAreUp, "the hearts are on screen")
+        check(pets.allSatisfy { !$0.interaction.isTalking },
+              "and the line has come down, so nothing overlaps the hearts")
+
+        // --- parting --------------------------------------------------------------------
+        check(waitFor(.part, within: KissRoutine.kissDuration + 1), "the kiss ends",
+              "phase \(kissPhase.map { $0.rawValue } ?? "none")")
+        check(!kissHeartsAreUp, "the hearts come down with it")
+        check(pets.allSatisfy { $0.behavior.state == .walk }, "and both cats walk away",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+
+        check(waitFor(nil, within: KissRoutine.partDuration + 1),
+              "the routine finishes and hands the pair back to its own behaviour",
+              "phase \(kissPhase.map { $0.rawValue } ?? "none")")
+
+        settle(0.5)
+        check(!MeetingCoordinator.haveMet(pets[0].window.frame, pets[1].window.frame),
+              "the two are apart again, so the next tick is not read as a fresh meeting")
+
+        // --- the toggle -----------------------------------------------------------------
+        var noKissing = testConfig
+        noKissing.kisses = false
+        applyConfig(noKissing, persist: false)
+        check(!interactionCanKiss, "with kissing switched off, the menu item is gone")
+        interactionRequestKiss()
+        check(kissPhase == nil, "and asking anyway does nothing",
+              "phase \(kissPhase.map { $0.rawValue } ?? "none")")
+
+        // --- put the real settings back --------------------------------------------------
+        applyConfig(originalConfig, persist: false)
+        check(config == originalConfig, "the test restored your original settings")
+
+        print("")
+        if failures > 0 { print("\(failures) of \(checks) checks FAILED"); exit(1) }
+        print("all \(checks) checks passed")
+        exit(0)
+    }
 }

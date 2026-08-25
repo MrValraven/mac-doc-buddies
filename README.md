@@ -68,6 +68,7 @@ Run the binary directly (`DockPet.app/Contents/MacOS/DockPet`) with:
 | `--menu-test` | Drives pause/resume in-process and checks the timers and visibility |
 | `--interaction-test` | Clicks the pet in-process, prints the clickable silhouette, and checks every prompt's bubble |
 | `--dedication-test` | Clicks the pet in-process and checks the dedication says itself once a day and then stops |
+| `--kiss-test` | Sends two cats to each other and checks every phase of the kiss, then restores your settings |
 | `--shot=PATH` | With `--settings-test` or `--interaction-test`, writes a PNG of what was rendered |
 
 Tests are an executable target rather than XCTest (this machine has Command Line Tools
@@ -85,7 +86,8 @@ Written with defaults on first launch to
 
 ```json
 { "speed": 30, "scale": 2, "screen": null, "menuBarIcon": true, "color": "olive",
-  "userName": null, "launchAtLogin": true, "birthday": null, "dedication": null }
+  "userName": null, "launchAtLogin": true, "birthday": null, "dedication": null,
+  "kisses": true }
 ```
 
 - `speed` — points per second (clamped to `0 < speed <= 500`)
@@ -108,6 +110,8 @@ Written with defaults on first launch to
   walks — so an existing `config.json` keeps working untouched
 - `birthday` — `"MM-DD"`, or `null`. On that date the greeting pool becomes a birthday pool
   instead of the usual one
+- `kisses` — whether two cats may kiss: both the occasional kiss when they meet and the
+  **Kiss the other cat** menu item. Defaults to `true`; it governs nothing with one cat
 - `dedication` — one line, said once, on the first click of the day, and not again until the
   date changes. `null` means nothing extra to say. Kept under 120 characters — longer is
   truncated and logged
@@ -129,6 +133,7 @@ Click the cat and a small menu opens next to it:
 | Encourage me | One of six encouragements |
 | Tell me a fact | A cat fact |
 | Take a nap | Puts the pet to sleep |
+| Kiss the other cat | Only with a second cat, and only while `kisses` is on — see **Two cats** below |
 | Settings… | Opens the Settings window |
 
 The pet answers in a speech bubble above its head, which takes itself down after a few
@@ -170,6 +175,32 @@ speaks, the other replies a beat later. Then both stand, turn around and walk ba
 they came, rather than passing through each other. They then leave each other alone for a
 minute, even though they'll pass each other again well before that — so a meeting stays an
 occasional event rather than a running commentary.
+
+### Kissing
+
+Roughly one meeting in five becomes a kiss instead of a conversation, and you can ask for
+one at any time from either cat's click menu — **Kiss the other cat**.
+
+The two walk to the point between them, whatever else they were doing, and stop when they
+touch. The left-hand one says *"Bisou, bisou!"*, the bubble comes down, four hearts rise
+and fade over the pair, and then both turn around and walk away. About six seconds end to
+end.
+
+Set `"kisses": false` — or clear **Let them kiss** in Settings — to switch off both the
+spontaneous kiss and the menu item. If the pair cannot reach each other within ten seconds
+(a Dock that moved, a strip that shrank) the kiss is abandoned and both cats simply walk
+on; the log says so.
+
+Because the whole sequence takes six seconds of screen and leaves nothing behind, it has a
+self-test of its own:
+
+```sh
+DockPet.app/Contents/MacOS/DockPet --kiss-test
+```
+
+It builds a second cat if you only have one, runs the kiss through every phase — checking
+the line, the sitting, the hearts and the parting — and puts your settings back before it
+exits. It needs Accessibility, like the pet itself.
 
 ## Sprites
 

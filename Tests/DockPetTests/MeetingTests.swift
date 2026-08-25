@@ -101,10 +101,10 @@ enum MeetingTests {
         do {
             var coordinator = MeetingCoordinator(seed: 42)
             // The cooldown starts elapsed, so the very first meeting is not swallowed.
-            let first = coordinator.meet(left, touching, openerName: "Mochi", replierName: "Tigre")
+            let first = coordinator.meet(left, touching, openerName: "Mochi", replierName: "Tigre")?.exchange
             check(first != nil, "the first meeting produces an exchange")
 
-            let immediate = coordinator.meet(left, touching, openerName: "Mochi", replierName: "Tigre")
+            let immediate = coordinator.meet(left, touching, openerName: "Mochi", replierName: "Tigre")?.exchange
             check(immediate == nil, "a second meeting during the cooldown produces nothing")
 
             // `advance` clamps a single call to `BehaviorMachine.maximumStep` (1 s), the
@@ -114,17 +114,17 @@ enum MeetingTests {
             for _ in 0..<Int(MeetingCoordinator.cooldown - 1) {
                 coordinator.advance(by: 1)
             }
-            check(coordinator.meet(left, touching, openerName: "Mochi", replierName: "Tigre") == nil,
+            check(coordinator.meet(left, touching, openerName: "Mochi", replierName: "Tigre")?.exchange == nil,
                   "one second before the cooldown is up, still nothing")
 
             coordinator.advance(by: 1)
-            check(coordinator.meet(left, touching, openerName: "Mochi", replierName: "Tigre") != nil,
+            check(coordinator.meet(left, touching, openerName: "Mochi", replierName: "Tigre")?.exchange != nil,
                   "once the cooldown is up, they meet again")
         }
 
         do {
             var coordinator = MeetingCoordinator(seed: 42)
-            check(coordinator.meet(left, apart, openerName: "Mochi", replierName: "Tigre") == nil,
+            check(coordinator.meet(left, apart, openerName: "Mochi", replierName: "Tigre")?.exchange == nil,
                   "pets that are not overlapping never meet, cooldown or not")
         }
 
@@ -133,7 +133,8 @@ enum MeetingTests {
         do {
             var coordinator = MeetingCoordinator(seed: 7)
             guard let exchange = coordinator.meet(left, touching,
-                                                  openerName: "Mochi", replierName: "Tigre") else {
+                                                  openerName: "Mochi",
+                                                  replierName: "Tigre")?.exchange else {
                 Harness.bail("expected an exchange from a fresh coordinator")
             }
             check(!exchange.opener.isEmpty, "the opener is not empty")
@@ -149,7 +150,8 @@ enum MeetingTests {
             // check that could never fail regardless of which name went where.
             var coordinator = MeetingCoordinator(seed: 10)
             guard let exchange = coordinator.meet(left, touching,
-                                                  openerName: "Mochi", replierName: "Tigre") else {
+                                                  openerName: "Mochi",
+                                                  replierName: "Tigre")?.exchange else {
                 Harness.bail("expected an exchange from a fresh coordinator")
             }
             check(exchange.opener.contains("Tigre"), "the opener addresses the replier")
@@ -160,8 +162,8 @@ enum MeetingTests {
             // Determinism: same seed, same words. SPEC §9.
             var a = MeetingCoordinator(seed: 99)
             var b = MeetingCoordinator(seed: 99)
-            let one = a.meet(left, touching, openerName: "M", replierName: "T")
-            let two = b.meet(left, touching, openerName: "M", replierName: "T")
+            let one = a.meet(left, touching, openerName: "M", replierName: "T")?.exchange
+            let two = b.meet(left, touching, openerName: "M", replierName: "T")?.exchange
             eq(one?.opener, two?.opener, "the same seed picks the same opener")
             eq(one?.reply, two?.reply, "and the same reply")
         }
@@ -169,7 +171,8 @@ enum MeetingTests {
         do {
             var coordinator = MeetingCoordinator(seed: 3)
             guard let nameless = coordinator.meet(left, touching,
-                                                  openerName: nil, replierName: nil) else {
+                                                  openerName: nil,
+                                                  replierName: nil)?.exchange else {
                 Harness.bail("expected an exchange with no names")
             }
             check(!nameless.opener.contains(" ,") && !nameless.opener.contains("  "),

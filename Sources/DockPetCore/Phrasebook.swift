@@ -190,6 +190,14 @@ public struct MeetingLine: Equatable {
 
 extension Phrasebook {
 
+    /// [M12] What a cat says on reaching the one it crossed the Dock for.
+    ///
+    /// One line rather than a pool, and no `{name}` in it: the kiss has an announcement,
+    /// not a conversation, and the cat it is addressed to is standing against it. A pool
+    /// here would also break the promise `reply(to:)` keeps — never the same line twice
+    /// running — for a moment that is meant to be the same every time.
+    public static let kissLine = "Bisou, bisou!"
+
     public static let meetingPairs: [MeetingLine] = [
         MeetingLine(opener: "Oh — hello, {name}.",
                     reply: "Hello yourself, {name}."),

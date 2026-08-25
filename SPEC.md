@@ -49,6 +49,7 @@ Sources/
     AlphaMask.swift          // [M10] which sprite pixels are solid enough to click
     BubbleGeometry.swift     // [M10] where the speech bubble goes, and for how long
     Meeting.swift            // [M11] when two pets have met, and what they trade
+    Kiss.swift               // [M12] the kiss's phases, and where the hearts are
   DockPet/                   // the executable
     main.swift
     AppDelegate.swift
@@ -65,6 +66,7 @@ Sources/
     Pet.swift                // [M11] one pet: its window, view, walker, behaviour, clicks
     OnboardingWindow.swift   // [M11] shown only when Accessibility is missing
     LoginItem.swift          // [M11] SMAppService registration, and its Settings toggle
+    HeartsWindow.swift       // [M12] the hearts that rise over a kissing pair
 Tests/
   DockPetTests/              // [M1] one executable target, not XCTest — see below
     main.swift               // entry point: runs each suite, then reports
@@ -78,6 +80,7 @@ Tests/
     AlphaMaskTests.swift     // [M10] pixel lookup, the flip, the click tolerance
     BubbleTests.swift        // [M10] bubble placement, screen edges, the tail
     MeetingTests.swift       // [M11] overlap, cooldown, the exchange, birthday dates
+    KissTests.swift          // [M12] steering, the phases, the drift, the toggle
 Resources/
   sprites/
 ```
@@ -776,6 +779,48 @@ so two cats can be told apart in the log; and `--interaction-test --shot=` rende
 
 **If the deadline arrives first, cut 11e.** Two cats simply coexisting on the Dock is
 already the thing that was being built. A ragged meeting is worse than no meeting.
+
+**M12 — The kiss.** One meeting in five, and any time you ask for it, the two cats walk to
+each other and kiss instead of trading a line.
+
+- `Kiss.swift` is pure, in `DockPetCore`, and owns both halves that can be checked without a
+  screen: `KissRoutine` — the phases and their clock — and `HeartDrift` — where each heart is
+  and how solid, at a moment in the kiss. `AppDelegate` applies them; it decides nothing
+  about timing itself.
+- The sequence: **approach** (both walk to the point between them, facing each other) →
+  **announce** (the left-hand cat says *"Bisou, bisou!"* in the ordinary bubble) → **kiss**
+  (bubble down, four hearts rise and fade) → **part** (both turn around and walk away, still
+  under the routine, so the overlap they are standing in is not read as a fresh meeting).
+- **Walking to a place is a new primitive**, `Walker.walk(toward:by:maxDistance:)`, and it is
+  deliberately not built on `advance`: that method's whole job is turning round at the ends,
+  which is the one thing a cat crossing the Dock to meet another must not do. It shares the
+  bounded step and the clamp to the strip, because a stalled timer and a shrinking Dock are
+  no less real during a kiss.
+- **The approach has a ten-second ceiling.** The strip can move, shrink or vanish under the
+  pair mid-walk, and a routine with no way to give up would hold both cats out of their own
+  behaviour machine forever. An abandoned kiss says so in the log.
+- **The animation timer must not suspend mid-kiss.** Both cats sit through the line and the
+  hearts, so §6's "stationary" test would suspend the timer on the frame they sit down —
+  taking the clock that ends the kiss with it. A kiss in progress is now something to
+  animate; the other suspension reasons still win, and the kiss is released rather than left
+  hanging when they do.
+- **The hearts own a timer of their own**, for a second and a half, and invalidate it
+  themselves. §6 is about steady-state wakeups; this adds none. They are a window of the
+  pair's rather than of either cat's, for the reason the bubble is its own window (§7 M10):
+  the pet's frame is the sprite's frame and every position check is written against it.
+- **No new art.** The hearts are an emoji; the kiss itself is the M4 flip and the `sit` sheet
+  M11 already uses. If this milestone needs a sprite sheet, it has been designed wrong.
+- `kisses` is a new `config.json` key, defaulting to `true`, with a *Let them kiss* checkbox
+  beside the second cat's coat. One flag governs both the spontaneous kiss and the click
+  menu's *Kiss the other cat*: a menu item that still works after the feature is switched off
+  is a bug report waiting to be filed.
+
+**Verification.** Per §9: `KissTests` covers the steering, every phase transition, the
+stalled-tick bound, the abandonment ceiling, the heart drift and the one-in-five rate;
+`--verbose` gains `kiss=`, `kissClock=` and `hearts=` on the stage line, because a kiss is
+otherwise six seconds of two cats whose only log line says `behavior=sit`; and `--kiss-test`
+drives the whole sequence in-process, checking the line, the sitting, the hearts and the
+parting, then puts the real config back.
 
 
 ## 8. Known traps

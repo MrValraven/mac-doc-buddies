@@ -36,6 +36,19 @@ protocol PetInteractionDelegate: AnyObject {
     /// [M11] Also resolved per interaction: a nap has to land on the cat that was clicked,
     /// not on whichever one happens to be first in the array.
     func interactionForcePetState(_ state: PetState, for interaction: PetInteraction)
+    /// [M12] Whether *Kiss the other cat* belongs in this pet's menu — there is a second
+    /// cat, kissing is switched on, and no kiss is already under way.
+    ///
+    /// A property rather than a stored flag, because all three of those can change while
+    /// the cat is sitting there: Settings can drop the second cat or turn kissing off, and
+    /// the other cat may already be walking over. The menu is built per click, so it is
+    /// asked per click.
+    var interactionCanKiss: Bool { get }
+
+    /// [M12] Send the two cats to each other. Takes no pet: a kiss is the pair's, and
+    /// which of them was clicked has no bearing on who ends up on the left.
+    func interactionRequestKiss()
+
     /// Open the Settings window, so the click menu is a complete way to reach the app for
     /// anyone who turned the menu bar icon off.
     func interactionShowSettings()
@@ -173,6 +186,17 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
             menu.addItem(item)
         }
 
+        // [M12] Only with a second cat to kiss, and only while kissing is switched on. A
+        // menu item that answers "there is nobody to kiss" would be a worse answer than not
+        // being there — the menu is short enough that its length is information.
+        if delegate?.interactionCanKiss == true {
+            menu.addItem(.separator())
+            let kiss = NSMenuItem(title: "Kiss the other cat", action: #selector(kissChosen),
+                                  keyEquivalent: "")
+            kiss.target = self
+            menu.addItem(kiss)
+        }
+
         menu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(settingsChosen),
                                   keyEquivalent: "")
@@ -194,6 +218,10 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
 
     @objc private func settingsChosen() {
         delegate?.interactionShowSettings()
+    }
+
+    @objc private func kissChosen() {
+        delegate?.interactionRequestKiss()
     }
 
     @objc private func promptChosen(_ sender: NSMenuItem) {

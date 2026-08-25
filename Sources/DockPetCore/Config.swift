@@ -58,6 +58,17 @@ public struct PetConfig: Codable, Equatable {
     /// date changes. `nil` means the pet has nothing extra to say.
     public var dedication: String?
 
+    /// [M12] Whether two cats may kiss — both the occasional one that happens on its own
+    /// when they meet, and the *Kiss* item in the click menu.
+    ///
+    /// One flag for both on purpose. Two switches would mean explaining which of them a
+    /// user who "turned kissing off" had actually turned off, and a menu item that still
+    /// works after you switched the feature off is a bug report waiting to be filed.
+    ///
+    /// Defaults on: with one cat it has nothing to govern, and someone who has gone to the
+    /// trouble of adding a second cat is not looking for less from them.
+    public var kisses: Bool
+
     /// The chosen coat, falling back to the default rather than to nothing. `validated()`
     /// has already replaced an unknown id by the time a config is in use; this fallback is
     /// for the un-validated case, where an invisible cat would be the worse answer.
@@ -71,7 +82,8 @@ public struct PetConfig: Codable, Equatable {
     public init(speed: Double = 30, scale: Int = 2, screen: String? = nil,
                 menuBarIcon: Bool = true, color: String = CatPalette.default.id,
                 userName: String? = nil, launchAtLogin: Bool = true,
-                pets: [PetProfile] = [], birthday: String? = nil, dedication: String? = nil) {
+                pets: [PetProfile] = [], birthday: String? = nil, dedication: String? = nil,
+                kisses: Bool = true) {
         self.speed = speed
         self.scale = scale
         self.screen = screen
@@ -82,6 +94,7 @@ public struct PetConfig: Codable, Equatable {
         self.pets = pets
         self.birthday = birthday
         self.dedication = dedication
+        self.kisses = kisses
     }
 
     /// Missing keys fall back to the defaults, so a partial config file is valid and a
@@ -100,6 +113,7 @@ public struct PetConfig: Codable, Equatable {
         self.pets = try c.decodeIfPresent([PetProfile].self, forKey: .pets) ?? []
         self.birthday = try c.decodeIfPresent(String.self, forKey: .birthday)
         self.dedication = try c.decodeIfPresent(String.self, forKey: .dedication)
+        self.kisses = try c.decodeIfPresent(Bool.self, forKey: .kisses) ?? PetConfig.default.kisses
     }
 
     /// Longest name that still fits in a speech bubble beside a Dock-sized cat.

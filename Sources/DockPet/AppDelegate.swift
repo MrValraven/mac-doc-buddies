@@ -25,6 +25,7 @@ struct LaunchOptions {
     /// dedication (see `PetInteraction.isSelfTest`).
     var isSelfTest: Bool {
         renderTest || settingsTest || menuTest || dockBounds || interactionTest || dedicationTest
+            || kissTest
     }
 
     /// With --settings-test, also render the window to this PNG path. Rendered offscreen
@@ -39,6 +40,10 @@ struct LaunchOptions {
     /// [M10] Drive the click menu and the speech bubble and exit. A click on a floating
     /// window cannot be scripted without Accessibility (§4c), so the app clicks itself.
     let interactionTest: Bool
+    /// [M12] Send two cats to each other, run the kiss to its end, and exit. The sequence
+    /// takes six seconds of screen and produces no file, so this is the only way anybody
+    /// who cannot watch it can tell whether it works.
+    let kissTest: Bool
 
     init(arguments: [String]) {
         self.verbose = arguments.contains("--verbose") || arguments.contains("-v")
@@ -50,6 +55,7 @@ struct LaunchOptions {
         self.dockBounds = arguments.contains("--dock-bounds")
         self.interactionTest = arguments.contains("--interaction-test")
         self.dedicationTest = arguments.contains("--dedication-test")
+        self.kissTest = arguments.contains("--kiss-test")
     }
 }
 
@@ -152,6 +158,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// rolls dice (SPEC §9). It owns the decision — have they met, is the cooldown up,
     /// which pair of lines — and this file only applies it.
     private var meetings = MeetingCoordinator(seed: UInt64.random(in: UInt64.min...UInt64.max))
+
+    /// [M12] The kiss in progress, or `nil` — which is nearly always. One at a time: the
+    /// cast is two cats, and both of them are in it.
+    private var kiss: KissInProgress?
+
+    /// The routine, the pair it belongs to, and the hearts while they are up.
+    ///
+    /// `left` and `right` are settled once, when the kiss starts, from where the cats are
+    /// standing — not from their position in `pets`. They swap places during the approach
+    /// often enough that reading it per frame would have the line come out of whichever cat
+    /// happened to be leading.
+    private struct KissInProgress {
+        var routine = KissRoutine()
+        let left: Pet
+        let right: Pet
+        var hearts: HeartsWindow?
+    }
 
     var currentLocation: DockLocation?
     private var lastAnimationTime: CFTimeInterval = 0
@@ -302,6 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         if options.menuTest { runMenuTest() }
         if options.interactionTest { runInteractionTest() }
         if options.dedicationTest { runDedicationTest() }
+        if options.kissTest { runKissTest() }
 
         // [M11] Skipped under a self-test: a test run must not put a window on screen and
         // wait for a human. Skipped when already granted, which is the normal case for me
@@ -460,6 +484,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // Where everyone was standing, so a surviving cat is not teleported to the near
         // end because a different cat was added or dropped.
         let carried = pets.map(\.walker)
+        // [M12] Before the cats go: the hearts belong to the pair, not to either window, so
+        // nothing else on this path would take them down.
+        endKiss()
         for pet in pets { pet.teardown() }
         pets = []
         spriteSets = sets
@@ -796,6 +823,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
               + "the app",
               "pet 0 has \(coatPixels(CatPalette.grey.coat, ofPet: 0)) grey coat pixels")
 
+        // [M12] The kissing toggle, while there are two cats for it to govern.
+        window.simulate(kisses: false)
+        settle(0.2)
+        check(config.kisses == false, "the kissing checkbox reaches the config",
+              "got \(config.kisses)")
+        check(!interactionCanKiss,
+              "and takes the menu item away with it, rather than leaving one that does nothing")
+        window.simulate(kisses: true)
+        settle(0.2)
+        check(config.kisses, "and switching it back on returns it", "got \(config.kisses)")
+        check(interactionCanKiss, "along with the menu item")
+
         let droppedWindow = pets.count == 2 ? pets[1].window : nil
         window.simulate(secondCat: false)
         settle(0.2)
@@ -863,6 +902,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // registered during teardown is a callback into a half-dead app. Every pet has one.
         // [M11] `Pet.teardown()` is the single place a pet is let go, so quitting and
         // dropping a cat from Settings cannot clean up differently.
+        // [M12] The hearts are the pair's rather than a pet's, and they own a timer.
+        endKiss()
         for pet in pets { pet.teardown() }
     }
 
@@ -1001,6 +1042,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     func suspensionReason() -> AnimationSuspension? {
         if paused { return .paused }
         if currentLocation == nil { return .dockNotLocated }
+        // [M12] A kiss is something to animate even when nothing is moving. Both cats sit
+        // through the line and the hearts, and without this the timer would suspend on the
+        // frame they sat down — taking the clock that ends the kiss with it and leaving the
+        // pair sitting there with a bubble up, permanently. The other reasons still win;
+        // `updateAnimationState` lets the kiss go rather than letting it hang.
+        if kiss != nil { return nil }
         if pets.allSatisfy({ $0.isStationary(spriteSet: sprites(for: $0)) }) { return .stationary }
         if ProcessInfo.processInfo.isLowPowerModeEnabled { return .lowPowerMode }
         return nil
@@ -1008,6 +1055,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
     private func updateAnimationState() {
         if let reason = suspensionReason() {
+            // [M12] The timer is about to stop, and the kiss is driven by it. Letting it go
+            // here is what keeps "the Dock went away mid-kiss" from meaning "two cats sit
+            // facing each other until the app is relaunched".
+            if kiss != nil {
+                print("[kiss] abandoned — the animation stopped (\(reason.rawValue))")
+                releaseKiss()
+            }
             suspendAnimation()
             logAnimation("suspended — \(reason.rawValue)")
         } else {
@@ -1038,10 +1092,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         let dt = now - lastAnimationTime
         lastAnimationTime = now
 
+        // [M12] Before the pets move: the kiss decides where two of them are going, and
+        // the phase it lands on this frame is what `moves:` below is asked about.
+        advanceKiss(by: dt, on: strip)
+
         // [M11] One timer, every pet. SPEC §6: a second cat must not double the app's
         // wakeups — only the work done inside a wakeup.
         for pet in pets {
-            pet.advanceAnimation(by: dt, on: strip, spriteSet: sprites(for: pet))
+            pet.advanceAnimation(by: dt, on: strip, spriteSet: sprites(for: pet),
+                                 moves: !isSteered(pet))
         }
     }
 
@@ -1057,6 +1116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// `sit` already has a sheet.
     private func considerMeeting() {
         guard pets.count == 2 else { return }
+        // [M12] A kiss owns both cats for its whole length, including the parting walk —
+        // without this, the overlap they are standing in during the kiss would be read as
+        // a fresh meeting and put a conversation on top of it.
+        guard kiss == nil else { return }
         let a = pets[0], b = pets[1]
 
         // Neither cat interrupts itself mid-sentence, and a cat being clicked is having a
@@ -1076,9 +1139,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         let opener = aIsLeft ? a : b
         let replier = aIsLeft ? b : a
 
-        guard let exchange = meetings.meet(a.window.frame, b.window.frame,
-                                           openerName: opener.profile.name,
-                                           replierName: replier.profile.name) else { return }
+        guard let encounter = meetings.meet(a.window.frame, b.window.frame,
+                                            openerName: opener.profile.name,
+                                            replierName: replier.profile.name,
+                                            kissesAllowed: config.kisses) else { return }
+
+        // [M12] One meeting in five, when kissing is switched on. The pair is handed to the
+        // kiss whole — it does its own sitting, facing and parting — so nothing below this
+        // point runs for it.
+        guard case .chat(let exchange) = encounter else {
+            beginKiss(opener, replier, reason: "they met")
+            return
+        }
 
         for pet in [a, b] {
             pet.behavior.force(.sit)
@@ -1134,6 +1206,193 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         updateAnimationState()
     }
 
+    // MARK: - [M12] The kiss
+
+    /// Whether this pet's position is being driven by the kiss rather than by its walker.
+    ///
+    /// True only during the approach. Once they are touching, the pair sits — and the walk
+    /// away afterwards is an ordinary walk in a reversed direction, which is what makes the
+    /// parting look like the cats decided it rather than like a cutscene.
+    private func isSteered(_ pet: Pet) -> Bool {
+        guard let kiss, kiss.routine.phase == .approach else { return false }
+        return pet === kiss.left || pet === kiss.right
+    }
+
+    /// Start a kiss between two cats: they drop what they are saying and set off.
+    ///
+    /// `reason` is for the log and nothing else — SPEC §9, on a six-second sequence nobody
+    /// reading this can watch. "they met" and "asked for it" are the two.
+    private func beginKiss(_ a: Pet, _ b: Pet, reason: String) {
+        guard kiss == nil, pets.count == 2 else { return }
+
+        // Settled here, once. During the approach the two cats cross and re-cross; reading
+        // "who is on the left" per frame would move the line from one cat to the other
+        // mid-sentence.
+        let aIsLeft = a.window.frame.minX <= b.window.frame.minX
+        let left = aIsLeft ? a : b
+        let right = aIsLeft ? b : a
+        kiss = KissInProgress(left: left, right: right)
+
+        // A cat mid-sentence stops talking rather than walking off with its bubble in tow.
+        for pet in [left, right] {
+            pet.interaction.dismissBubble()
+            pet.behavior.force(.walk)
+            pet.applyBehaviorState(.walk, spriteSet: sprites(for: pet))
+        }
+
+        print("[kiss] pet \(left.index) and pet \(right.index) set off — \(reason)")
+        logLocation("pet \(left.index) and pet \(right.index) walk toward each other")
+        updateAnimationState()
+    }
+
+    /// One frame of the kiss: steer the pair, then act on any phase it just entered.
+    private func advanceKiss(by dt: TimeInterval, on strip: WalkStrip) {
+        guard var current = kiss else { return }
+
+        // Settings can rebuild the cast at any moment, and a kiss holding two cats that are
+        // no longer on screen would keep the hearts up over nothing and never end.
+        guard pets.contains(where: { $0 === current.left }),
+              pets.contains(where: { $0 === current.right }) else {
+            print("[kiss] abandoned — the cast changed mid-kiss")
+            endKiss()
+            return
+        }
+
+        let left = current.left, right = current.right
+        let touching = MeetingCoordinator.haveMet(left.window.frame, right.window.frame)
+        let (previous, phase) = current.routine.advance(by: dt, touching: touching)
+        kiss = current
+
+        if phase != previous { enterKissPhase(phase, previous: previous, on: strip) }
+
+        // Per-frame work, after the transition so a phase entered this frame gets its own
+        // first frame rather than the outgoing phase's.
+        switch kiss?.routine.phase {
+        case .approach:
+            // Both walk to the point between them. Recomputed every frame rather than
+            // fixed at the start: the strip can move or shrink under them mid-approach, and
+            // a target from four seconds ago can be somewhere neither cat can stand.
+            let midpoint = (left.walker.distance + right.walker.distance) / 2
+            for pet in [left, right] {
+                pet.walker.walk(toward: midpoint, by: dt,
+                                maxDistance: Geometry.maximumDistance(for: pet.size, on: strip))
+            }
+            // Facing is set from the pair rather than from each walker's direction: the two
+            // are the same thing during the approach, except on the frames where a cat has
+            // arrived and stopped, and a cat that turns its back the moment it arrives is
+            // the one frame of this anybody would notice.
+            left.view.facing = .right
+            right.view.facing = .left
+        case .kiss:
+            // The Dock can be resized mid-kiss; the hearts belong over the pair, not over
+            // the place the pair was standing when they went up.
+            kiss?.hearts?.reposition(over: left.window.frame.union(right.window.frame))
+        default:
+            break
+        }
+    }
+
+    /// The one-shot work that belongs to a phase: the line, the hearts, the parting.
+    private func enterKissPhase(_ phase: KissRoutine.Phase, previous: KissRoutine.Phase,
+                                on strip: WalkStrip) {
+        guard let current = kiss else { return }
+        let left = current.left, right = current.right
+
+        switch phase {
+        case .approach:
+            break   // where every kiss starts; nothing to enter
+
+        case .announce:
+            for pet in [left, right] {
+                pet.behavior.force(.sit)
+                pet.applyBehaviorState(.sit, spriteSet: sprites(for: pet))
+            }
+            left.view.facing = .right
+            right.view.facing = .left
+            print("[kiss] pet \(left.index) → \"\(Phrasebook.kissLine)\"")
+            logLocation("pet \(left.index) and pet \(right.index) reach each other — both sit")
+            left.interaction.showBubble(Phrasebook.kissLine)
+
+        case .kiss:
+            // The line comes down before the hearts go up, for the reason the meeting takes
+            // the opener's bubble down before the reply: two cats this close share the space
+            // a bubble needs, and a bubble under the hearts reads as a rendering glitch.
+            left.interaction.dismissBubble()
+            let hearts = HeartsWindow(over: left.window.frame.union(right.window.frame),
+                                      scale: config.scale)
+            kiss?.hearts = hearts
+            print("[kiss] pet \(left.index) and pet \(right.index) kiss — hearts up")
+            // The routine's own clock ends this phase; the hearts' timer only draws them.
+            // Nothing is hung off `onFinish` beyond dropping the reference, so a stalled
+            // frame cannot leave the pair sitting there forever waiting on a window.
+            hearts.start { [weak self] in self?.kiss?.hearts = nil }
+
+        case .part:
+            kiss?.hearts?.dismiss()
+            kiss?.hearts = nil
+            for pet in [left, right] {
+                pet.walker.reverse()
+                pet.behavior.force(.walk)
+                pet.applyBehaviorState(.walk, spriteSet: sprites(for: pet))
+                pet.view.facing = pet.walker.direction == .forward ? .right : .left
+            }
+            print("[kiss] pet \(left.index) and pet \(right.index) part")
+            updateAnimationState()
+
+        case .done:
+            if current.routine.abandoned {
+                // The approach ran out of time — a Dock that moved, a strip that shrank, a
+                // cat that could not reach the midpoint. Say so: two cats walking toward
+                // each other and then giving up is otherwise unexplainable in the log.
+                print("[kiss] abandoned — the two never reached each other")
+                for pet in [left, right] {
+                    pet.behavior.force(.walk)
+                    pet.applyBehaviorState(.walk, spriteSet: sprites(for: pet))
+                }
+            }
+            endKiss()
+        }
+    }
+
+    /// Let the kiss go: hearts down, pair handed back to its own behaviour.
+    ///
+    /// Also the teardown path — called when the cast changes mid-kiss and when the app
+    /// quits — so there is one place that can leave a hearts window on screen, rather than
+    /// three.
+    func endKiss() {
+        guard kiss != nil else { return }
+        releaseKiss()
+        updateAnimationState()
+    }
+
+    /// Drop the kiss without touching the timer.
+    ///
+    /// Separate from `endKiss` for one caller: `updateAnimationState` itself, which is
+    /// already deciding about the timer when it finds a kiss it has to let go. Calling
+    /// `endKiss` from there would re-enter it.
+    private func releaseKiss() {
+        guard let current = kiss else { return }
+        current.hearts?.dismiss()
+        // A kiss let go mid-sentence must not leave the line hanging over a cat that has
+        // gone back to walking.
+        for pet in [current.left, current.right] { pet.interaction.dismissBubble() }
+        kiss = nil
+
+        // [M12] The pair has just spent six seconds together; the cooldown is stamped so
+        // they do not strike up a conversation the instant they stop kissing. It is already
+        // stamped for a kiss that came out of a meeting — doing it again is harmless, and
+        // it is the only stamp a kiss asked for from the menu ever gets.
+        meetings.noteMeeting()
+    }
+
+    /// Exposed so `--kiss-test` can follow a sequence it cannot watch. `nil` when no kiss
+    /// is under way, which is nearly always.
+    var kissPhase: KissRoutine.Phase? { kiss?.routine.phase }
+
+    /// Exposed for the same reason: the hearts are the one part of the kiss with no line
+    /// in the log of its own while it is on screen.
+    var kissHeartsAreUp: Bool { kiss?.hearts?.isVisible ?? false }
+
     // MARK: - Logging
 
     /// State changes are always logged; they are rare and they explain everything else.
@@ -1170,6 +1429,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             line += " strip=[\(Self.f(strip.start))...\(Self.f(strip.end))]"
             line += " tiles=" + (location.tiles.map { "[\(Self.f($0.minX))...\(Self.f($0.maxX))]" }
                                  ?? "unmeasured")
+            // [M12] A kiss holds both cats out of their own behaviour for six seconds. With
+            // nothing here, a `--verbose` reader sees two cats walk into each other, sit,
+            // stand up and part, with every per-pet line above saying only `behavior=sit`
+            // and no line anywhere naming the thing that is happening.
+            if let kiss {
+                line += " kiss=\(kiss.routine.phase.rawValue)"
+                line += " kissClock=\(Self.f(CGFloat(kiss.routine.timeInPhase)))s"
+                line += " hearts=\(kiss.hearts?.isVisible == true)"
+            }
         } else {
             line += "state=dormant"
             line += " pets=\(pets.count)"
@@ -1479,6 +1747,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             logLocation("pet \(pet.index): \(pet.behavior.state.rawValue) (asked for it)")
         }
         updateAnimationState()
+    }
+
+    /// [M12] Three conditions, all of which can change between one click and the next.
+    var interactionCanKiss: Bool { config.kisses && pets.count == 2 && kiss == nil }
+
+    func interactionRequestKiss() {
+        // Re-checked rather than trusted: the menu was built when the click landed, and a
+        // menu can sit open while the other cat is dropped from Settings or starts a kiss
+        // of its own.
+        guard interactionCanKiss else { return }
+        beginKiss(pets[0], pets[1], reason: "asked for it")
     }
 
     func interactionShowSettings() { showSettings() }

@@ -35,6 +35,11 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     private let secondCatCheck = NSButton(checkboxWithTitle: "A second cat",
                                           target: nil, action: nil)
     private let secondColorPopup = NSPopUpButton()
+    /// [M12] Whether the two of them may kiss — the occasional one when they meet, and the
+    /// *Kiss the other cat* item in the click menu. Meaningless with one cat, so it is
+    /// enabled alongside the second cat's coat popup.
+    private let kissCheck = NSButton(checkboxWithTitle: "Let them kiss",
+                                     target: nil, action: nil)
     private let scalePopup = NSPopUpButton()
     private let screenPopup = NSPopUpButton()
     private let menuBarCheck = NSButton(checkboxWithTitle: "Show the cat in the menu bar",
@@ -109,8 +114,11 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         secondCatCheck.action = #selector(controlChanged)
         secondColorPopup.target = self
         secondColorPopup.action = #selector(controlChanged)
+        kissCheck.target = self
+        kissCheck.action = #selector(controlChanged)
         let secondCatHint = Self.hint("Two is the limit. The second cat walks the same Dock, "
-                                      + "and when they meet they stop for a word.")
+                                      + "and when they meet they stop for a word — and now and "
+                                      + "then, a kiss.")
 
         scalePopup.target = self
         scalePopup.action = #selector(controlChanged)
@@ -140,6 +148,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
             [Self.label("Coat:"), colorPopup],
             [NSGridCell.emptyContentView, secondCatCheck],
             [Self.label("Its coat:"), secondColorPopup],
+            [NSGridCell.emptyContentView, kissCheck],
             [NSGridCell.emptyContentView, secondCatHint],
             [Self.label("Size:"), scalePopup],
             [Self.label("Display:"), screenPopup],
@@ -263,6 +272,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         Self.fillCoats(secondColorPopup, selecting: loadedPets.count > 1 ? loadedPets[1].color : nil)
         secondCatCheck.state = loadedPets.count > 1 ? .on : .off
         secondColorPopup.isEnabled = secondCatCheck.state == .on
+        kissCheck.isEnabled = secondCatCheck.state == .on
 
         var scales = Self.offeredScales
         if !scales.contains(config.scale) { scales.append(config.scale); scales.sort() }
@@ -297,6 +307,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
             screenPopup.selectItem(at: 0)
         }
 
+        kissCheck.state = config.kisses ? .on : .off
         menuBarCheck.state = config.menuBarIcon ? .on : .off
         loginCheck.state = config.launchAtLogin ? .on : .off
         nameField.stringValue = config.userName ?? ""
@@ -357,6 +368,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         config.speed = speedSlider.doubleValue.rounded()
         config.scale = scalePopup.selectedItem?.tag ?? config.scale
         config.screen = screenPopup.selectedItem?.representedObject as? String
+        config.kisses = kissCheck.state == .on
         config.menuBarIcon = menuBarCheck.state == .on
         config.launchAtLogin = loginCheck.state == .on
         config.color = coat
@@ -395,8 +407,10 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
 
     @objc private func controlChanged() {
         updateSpeedLabel()
-        // A coat popup for a cat that does not exist is a control with nothing behind it.
+        // A coat popup for a cat that does not exist is a control with nothing behind it,
+        // and neither is a kissing toggle for a cat with nobody to kiss.
         secondColorPopup.isEnabled = secondCatCheck.state == .on
+        kissCheck.isEnabled = secondCatCheck.state == .on
         chooseCoatForANewSecondCat()
         settingsDelegate?.settingsDidChange(currentValues())
         // Re-read the cast that actually took effect, so the next edit builds on it rather
@@ -470,7 +484,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
     func simulate(speed: Double? = nil, scale: Int? = nil, screen: String?? = nil,
                   menuBarIcon: Bool? = nil, color: String? = nil, userName: String? = nil,
                   launchAtLogin: Bool? = nil, secondCat: Bool? = nil,
-                  secondColor: String? = nil) {
+                  secondColor: String? = nil, kisses: Bool? = nil) {
         if let userName { nameField.stringValue = userName }
         if let speed { speedSlider.doubleValue = speed }
         if let scale { scalePopup.selectItem(withTag: scale) }
@@ -480,6 +494,7 @@ final class SettingsWindow: NSWindow, NSTextFieldDelegate {
         }
         if let menuBarIcon { menuBarCheck.state = menuBarIcon ? .on : .off }
         if let launchAtLogin { loginCheck.state = launchAtLogin ? .on : .off }
+        if let kisses { kissCheck.state = kisses ? .on : .off }
         if let color {
             let index = colorPopup.itemArray.firstIndex { ($0.representedObject as? String) == color }
             colorPopup.selectItem(at: index ?? 0)

@@ -89,6 +89,48 @@ public struct Walker: Equatable {
     public mutating func reverse() {
         direction = direction.reversed
     }
+
+    /// [M12] Walk toward one point on the strip instead of back and forth, and say whether
+    /// we are standing on it. Used by the kiss, where two cats have somewhere to be.
+    ///
+    /// Deliberately *not* built on `advance`: that method's whole job is to turn round at
+    /// the ends, which is the one thing a cat crossing the Dock to meet another must not
+    /// do. The bounded step and the clamp to the strip are shared, because a stalled timer
+    /// and a shrinking Dock are no less real during a kiss.
+    ///
+    /// `target` is clamped to the strip rather than refused: the midpoint between two cats
+    /// is derived from live frames, and a Dock that shrinks mid-approach must leave them
+    /// walking to the nearest reachable point rather than to a place that no longer exists.
+    @discardableResult
+    public mutating func walk(toward target: CGFloat, by dt: TimeInterval,
+                              maxDistance: CGFloat) -> Bool {
+        let limit = max(0, maxDistance)
+
+        // The same answer `advance` gives a strip with no room: park at the near end. A
+        // cat inching toward zero on a Dock that has no walkable length is a worse reading
+        // of the situation than a cat that has simply stopped.
+        guard limit > 0 else {
+            distance = 0
+            return true
+        }
+
+        let goal = min(max(0, target), limit)
+
+        let step = CGFloat(min(max(0, dt), Self.maximumStep)) * speed
+        let gap = goal - distance
+
+        // Arrival covers both "already there" and "this step would overshoot". Landing on
+        // the target rather than oscillating around it is what lets the caller treat
+        // arrival as a one-way door.
+        guard abs(gap) > step else {
+            distance = goal
+            return true
+        }
+
+        direction = gap > 0 ? .forward : .backward
+        distance += step * CGFloat(direction.rawValue)
+        return false
+    }
 }
 
 // MARK: - State machine (M5)
