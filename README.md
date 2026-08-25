@@ -25,10 +25,34 @@ lives in [SPEC.md](SPEC.md), with the raw probe output in [PROBE.md](PROBE.md).
 `bundle.sh` does a release build, assembles `DockPet.app`, generates the app icon on
 first run, and prints the bundle path. It's idempotent — re-run it after any change.
 
-The build is unsigned and unnotarised on purpose (local personal build), so the first
-launch needs a right-click → Open.
+The build is signed with a local, self-signed identity (`./makecert.sh`, run once) rather
+than left ad-hoc or unsigned. That matters because the Accessibility grant a Dock-aware pet
+needs (see below) is recorded against the code signature: signed ad-hoc, that signature is a
+hash of the compiled code, so it changes — and the grant silently drops — on every rebuild.
+Signed with a certificate, it doesn't. On this machine that's invisible; you only notice it
+when moving the app elsewhere, below.
 
 To quit: use the menu bar item, or `killall DockPet`.
+
+### Installing it on someone else's Mac
+
+The `makecert.sh` identity exists only on the machine it was created on, so on any other Mac
+DockPet is a **signed app from an unrecognised developer** — not unsigned, just not trusted
+there. Two separate things follow from that:
+
+- **Gatekeeper.** First launch needs a right-click → Open rather than a double-click. If
+  macOS refuses outright instead of offering that, allow it explicitly in System Settings ›
+  Privacy & Security — there's an "Open Anyway" button there right after the refusal.
+- **Accessibility.** The grant is per machine, so it has to be given again there — the grant
+  made while building doesn't travel with the app. DockPet asks for this itself: on first
+  launch, if Accessibility isn't granted, a small window explains what the cat needs and why,
+  with a button that asks the system to prompt for the permission, which deep-links to the
+  right System Settings pane. Once it's granted, the cat appears within about half a second —
+  the same 500 ms poll that locates the Dock notices the grant on its own.
+
+Because the grant follows the code signature rather than the exact build, it survives a later
+update: rebuild and hand over a new `.app` signed with the same `makecert.sh` identity, and
+Accessibility does not need to be granted a second time on that machine.
 
 ### Useful flags
 
@@ -56,17 +80,33 @@ Written with defaults on first launch to
 `~/Library/Application Support/DockPet/config.json`. Every key is optional:
 
 ```json
-{ "speed": 30, "scale": 2, "screen": null, "menuBarIcon": true, "color": "orange",
-  "userName": null }
+{ "speed": 30, "scale": 2, "screen": null, "menuBarIcon": true, "color": "olive",
+  "userName": null, "launchAtLogin": true, "birthday": null, "dedication": null }
 ```
 
 - `speed` — points per second (clamped to `0 < speed <= 500`)
 - `scale` — integer sprite scale (clamped to `1...8`)
 - `screen` — `localizedName` of a display to pin the pet to, or `null` to follow the Dock
 - `menuBarIcon` — show the menu bar item
-- `color` — coat colour: `orange`, `grey`, `black`, `white`, `tuxedo` or `siamese`
+- `color` — coat colour: `olive` (the default — a bicolour cat, roughly 60% olive coat
+  to 40% white), `orange`, `grey`, `black`, `white`, `tuxedo` or `siamese`. The white
+  comes from the sprite sheet's belly region rather than from the palette, so every coat
+  is bicolour; `orange` is the palette the art is drawn in, and the only one that costs
+  no recolour at load.
 - `userName` — what the pet calls you in its speech bubbles. `null` falls back to the first
   name on your macOS account; set it to `""` to be greeted without a name
+- `launchAtLogin` — start DockPet automatically when you log in, via `SMAppService`.
+  Defaults to `true` — a pet that does not survive a reboot is gone within the week. A
+  registration failure is logged and left off, never fatal
+- `pets` — one or two cats to put on the Dock, each `{ "name", "color", "userName" }` (all
+  optional, same rules as above). A third entry is dropped, with a log line saying so. When
+  `pets` is absent or empty, the flat `color` and `userName` above describe the one cat that
+  walks — so an existing `config.json` keeps working untouched
+- `birthday` — `"MM-DD"`, or `null`. On that date the greeting pool becomes a birthday pool
+  instead of the usual one
+- `dedication` — one line, said once, on the first click of the day, and not again until the
+  date changes. `null` means nothing extra to say. Kept under 120 characters — longer is
+  truncated and logged
 
 Bad values are clamped and logged, never fatal. Reload without restarting via the menu
 bar's **Reload Sprites & Config**, or from a shell:
@@ -107,6 +147,25 @@ cursor is genuinely over the art. `--interaction-test` prints the exact region:
 ....++++###############+++.......
 ....+++################++.......      # art   + click tolerance   . falls through
 ```
+
+## Two cats
+
+Give `pets` two entries and both walk the Dock:
+
+```json
+{ "pets": [ { "name": "Mochi", "color": "olive", "userName": "Philippine" },
+            { "name": "Tigre", "color": "tuxedo", "userName": "Tiago" } ] }
+```
+
+Each cat has its own coat, its own name and its own behaviour clock, so they don't idle and
+sleep in lockstep. Each also answers only for itself: clicking one greets you with *that*
+cat's `userName`, not the other one's, and **Take a nap** puts only the clicked cat to sleep.
+
+When their paths cross, both stop, turn to face each other, sit, and trade a line — one
+speaks, the other replies a beat later. Then both stand, turn around and walk back the way
+they came, rather than passing through each other. They then leave each other alone for a
+minute, even though they'll pass each other again well before that — so a meeting stays an
+occasional event rather than a running commentary.
 
 ## Sprites
 
