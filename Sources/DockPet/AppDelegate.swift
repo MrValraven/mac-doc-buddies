@@ -252,8 +252,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                 self?.requestDockConfinement()
             })
             onboarding = window
-            window.orderFrontRegardless()
+            // A permission prompt should take focus rather than sit behind whatever the
+            // user was doing — SPEC §3's "never make key" rule is about the pet's own
+            // window, not this one.
             NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
         }
     }
 
@@ -799,6 +802,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         let now = CACurrentMediaTime()
         let dt = lastPollTime == 0 ? 0 : now - lastPollTime
         lastPollTime = now
+
+        // [M11] Bounded lifetime: once the window has said its piece and taken itself off
+        // screen, drop the reference rather than holding it — and re-dereferencing it —
+        // for the rest of the app's run.
+        if let onboarding = onboarding, onboarding.isFinished, !onboarding.isVisible {
+            self.onboarding = nil
+        }
 
         if paused {
             currentLocation = nil

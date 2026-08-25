@@ -22,14 +22,16 @@ final class OnboardingWindow: NSWindow {
         self.grantButton = NSButton(title: "Open Accessibility Settings…",
                                     target: nil, action: nil)
 
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 420, height: 190),
+        // Placeholder size only — the real size is computed below from the content once
+        // it exists, rather than guessed here. A titled/closable window still needs some
+        // starting contentRect to be constructed at all.
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 420, height: 1),
                    styleMask: [.titled, .closable],
                    backing: .buffered,
                    defer: false)
 
         title = "DockPet"
         isReleasedWhenClosed = false
-        center()
 
         let heading = NSTextField(labelWithString: "There's a cat for your Dock.")
         heading.font = .systemFont(ofSize: 15, weight: .semibold)
@@ -39,6 +41,11 @@ final class OnboardingWindow: NSWindow {
             + "icons are, it needs Accessibility permission — that's the only thing it asks for.")
         body.font = .systemFont(ofSize: 12)
         body.textColor = .secondaryLabelColor
+        // NSStackView's "leading" alignment pins only the leading edge of each arranged
+        // subview, not the trailing one — without a width, this wrapping label lays out at
+        // its near-single-line intrinsic width and gets clipped by the window edge instead
+        // of wrapping. 380 = the 420pt column minus the stack's 20pt insets on each side.
+        body.widthAnchor.constraint(equalToConstant: 380).isActive = true
 
         grantButton.target = self
         grantButton.action = #selector(grantPressed)
@@ -65,6 +72,13 @@ final class OnboardingWindow: NSWindow {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor),
         ])
         contentView = container
+
+        // Size the window to the content instead of a second hardcoded guess: the body
+        // sentence's wrapped line count depends on the text, and a fixed height here would
+        // repeat exactly the mistake the missing width constraint just made, one field over.
+        let fitting = stack.fittingSize
+        setContentSize(fitting)
+        center()
     }
 
     @objc private func grantPressed() {
