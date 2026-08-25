@@ -827,6 +827,64 @@ drives the whole sequence in-process, checking the line, the sitting, the hearts
 parting, then puts the real config back.
 
 
+**M13: the app notices you.** Seven features that all needed one thing first: a rule for
+which of them owns a cat.
+
+Through M12 exactly one thing could take a cat away from its behaviour machine, and one
+guard expressed it: `guard kiss == nil`. M13 adds four more claimants that can want the same
+cat in the same tick. Written as guards that is a pile of `kiss == nil && !isTalking && ...`
+across five call sites, each needing an edit when the sixth arrives, and each failing
+silently when it is wrong: a feature that loses a contest it should have won is
+indistinguishable from one that is simply not very active.
+
+So `PetOccupancy` holds the order and it is a tested table, not a convention. The order
+reads as "how much has the user got to do with this": autonomous amusement (`attention`,
+`napSpot`) loses to everything; a volunteered remark (`reacting`) waits behind anything she
+asked for; the two cats' own business (`meeting`) sits below a human reaching for one of
+them; `talking` and `petted` are the user directly; and `kiss` and `scene` are scripted
+sequences that outrank the rest because being cut off half way strands a cat mid-walk with
+hearts over its head and no path left to take them down.
+
+Two rules in `PetOccupancy` carry the weight. A pair claim is all or nothing, because a kiss
+granted one cat and refused the other walks one cat to the middle of the Dock to be kissed by
+a cat asleep at the far end. And a release only lands if you are the current holder, because
+a preempted claimant is never told it lost, and would otherwise end the click reply that took
+its cat.
+
+- **13a, words.** `TimeOfDay` routes the `hello` pool by the hour. Pools are equal in size
+  so `PhrasebookTests`' reachability check behaves identically at any hour; the suite is run
+  under three timezones to prove it. The no-repeat memory moved from an index to the line,
+  because a pet running past 22:00 would compare an index against a pool that no longer holds
+  that sentence.
+- **13b, touch.** Press and hold to pet the cat. The menu moved to mouse *up*, because until
+  the button comes up a click and a hold are the same event. The risk was never the purr, it
+  was breaking the app's only interaction, so `Purr.release` tests elapsed first and two
+  sweeps pin both halves.
+- **13c, particles.** `ConfettiDrift` is `HeartDrift`'s sibling with gravity the other way
+  up. Real gravity was tried and rejected: it left pieces hanging at the top and whipping past
+  the cats.
+- **13d, attention.** The cats turn to watch the cursor and never chase it. Hysteresis is
+  three separate problems (which cat, in or out of the zone, which way it faces) and needed
+  three separate fixes; each has a test that jiggles the pointer across the exact boundary 60
+  times and asserts zero transitions, and each was confirmed load-bearing by zeroing its
+  margin and watching the flips appear.
+- **13e, the nap spot.** A cat walks to a random Dock tile to sleep on it. The 8 second
+  ceiling is not the kiss's 10 and not for the kiss's reason: crossing the measured 748 pt
+  Dock at 30 pt/s takes 25 s, longer than the longest sleep dwell, so without a ceiling a cat
+  drawing a far tile would spend its whole nap walking and never be seen asleep on anything.
+- **13f, reactions.** A remark about the frontmost app, keyed on bundle id rather than
+  display name, because display names are localised and a French macOS would match nothing.
+  Rate limiting is the correctness of this feature, not a nicety, and a suppressed remark
+  spends no cooldown.
+- **13g, the scene.** The birthday. `BirthdayScene` is `KissRoutine`'s sibling and borrows
+  all four of its hard-won properties rather than solving them again. It is the one sequence
+  with no way to try again, so `--scene-test` exists: it runs the whole thing on any date and
+  asserts it wrote neither once-a-day stamp.
+
+The driving for 13d through 13g lives in `SceneDirector.swift` and `AmbientDirector.swift`
+rather than in `AppDelegate`, which was 1933 lines before this milestone. Only stored state
+went there, because a Swift extension cannot hold any.
+
 ## 8. Known traps
 
 1. **Coordinate flipping.** §4b. Write it once, test it, never inline it.

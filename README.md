@@ -69,6 +69,7 @@ Run the binary directly (`DockPet.app/Contents/MacOS/DockPet`) with:
 | `--interaction-test` | Clicks the pet in-process, prints the clickable silhouette, and checks every prompt's bubble |
 | `--dedication-test` | Clicks the pet in-process and checks the dedication says itself once a day and then stops |
 | `--kiss-test` | Sends two cats to each other and checks every phase of the kiss, then restores your settings |
+| `--scene-test` | Runs the birthday scene now, whatever the date, and checks every phase of it. Writes neither once-a-day stamp, so rehearsing it does not spend the real one |
 | `--shot=PATH` | With `--settings-test` or `--interaction-test`, writes a PNG of what was rendered |
 
 Tests are an executable target rather than XCTest (this machine has Command Line Tools
@@ -87,34 +88,39 @@ Written with defaults on first launch to
 ```json
 { "speed": 30, "scale": 2, "screen": null, "menuBarIcon": true, "color": "olive",
   "userName": null, "launchAtLogin": true, "birthday": null, "dedication": null,
-  "kisses": true }
+  "kisses": true, "reactions": true, "attention": true }
 ```
 
-- `speed` — points per second (clamped to `0 < speed <= 500`)
-- `scale` — integer sprite scale (clamped to `1...8`)
-- `screen` — `localizedName` of a display to pin the pet to, or `null` to follow the Dock
-- `menuBarIcon` — show the menu bar item
-- `color` — coat colour: `olive` (the default — a bicolour cat, roughly 60% olive coat
+- `speed`: points per second (clamped to `0 < speed <= 500`)
+- `scale`: integer sprite scale (clamped to `1...8`)
+- `screen`: `localizedName` of a display to pin the pet to, or `null` to follow the Dock
+- `menuBarIcon`: show the menu bar item
+- `color`: coat colour: `olive` (the default — a bicolour cat, roughly 60% olive coat
   to 40% white), `orange`, `grey`, `black`, `white`, `tuxedo` or `siamese`. The white
   comes from the sprite sheet's belly region rather than from the palette, so every coat
   is bicolour; `orange` is the palette the art is drawn in, and the only one that costs
   no recolour at load.
-- `userName` — what the pet calls you in its speech bubbles. `null` falls back to the first
+- `userName`: what the pet calls you in its speech bubbles. `null` falls back to the first
   name on your macOS account; set it to `""` to be greeted without a name
-- `launchAtLogin` — start DockPet automatically when you log in, via `SMAppService`.
+- `launchAtLogin`: start DockPet automatically when you log in, via `SMAppService`.
   Defaults to `true` — a pet that does not survive a reboot is gone within the week. A
   registration failure is logged and left off, never fatal
-- `pets` — one or two cats to put on the Dock, each `{ "name", "color", "userName" }` (all
+- `pets`: one or two cats to put on the Dock, each `{ "name", "color", "userName" }` (all
   optional, same rules as above). A third entry is dropped, with a log line saying so. When
   `pets` is absent or empty, the flat `color` and `userName` above describe the one cat that
   walks — so an existing `config.json` keeps working untouched
-- `birthday` — `"MM-DD"`, or `null`. On that date the greeting pool becomes a birthday pool
+- `birthday`: `"MM-DD"`, or `null`. On that date the greeting pool becomes a birthday pool
   instead of the usual one
-- `kisses` — whether two cats may kiss: both the occasional kiss when they meet and the
+- `kisses`: whether two cats may kiss: both the occasional kiss when they meet and the
   **Kiss the other cat** menu item. Defaults to `true`; it governs nothing with one cat
-- `dedication` — one line, said once, on the first click of the day, and not again until the
-  date changes. `null` means nothing extra to say. Kept under 120 characters — longer is
-  truncated and logged
+- `dedication`: one line, said once, on the first click of the day, and not again until the
+  date changes. `null` means nothing extra to say. Kept under 120 characters; longer is
+  truncated and logged. On the birthday the scene says it instead, and that spends the day's
+  dedication, so it is not repeated on the next click
+- `reactions`: whether a cat may remark on the app you just brought to the front. Defaults
+  to `true`; see **Reacting to apps** below
+- `attention`: whether a cat turns to watch the pointer when it comes near the Dock.
+  Defaults to `true`; see **Noticing the cursor** below
 
 Bad values are clamped and logged, never fatal. Reload without restarting via the menu
 bar's **Reload Sprites & Config**, or from a shell:
@@ -202,6 +208,87 @@ It builds a second cat if you only have one, runs the kiss through every phase �
 the line, the sitting, the hearts and the parting — and puts your settings back before it
 exits. It needs Accessibility, like the pet itself.
 
+## Being noticed
+
+Four things the cats now do without being asked.
+
+### The time of day
+
+*Say hello* draws from the pool for the hour rather than one pool all day, so being greeted
+at eight in the morning and at one in the morning are different events. The boundaries are
+morning at 5, afternoon at 12, evening at 17, and night from 22 through 04:59.
+
+On the birthday the birthday greeting still wins: the swap happens before the phrasebook is
+asked, so the clock never reaches the hello pool that day.
+
+### Holding the cat
+
+**Press and hold** the cat and it sits and purrs for as long as you hold it, with a note
+rising over its head. Let go and it carries on.
+
+A quick click still opens the prompt menu, exactly as before. The threshold is 0.35 s, about
+three times an ordinary click: below roughly 0.2 s a slow click would be swallowed, and much
+above half a second the hold feels like nothing happened. The menu now opens on mouse *up*,
+because until the button comes up there is no way to tell a click from the start of a hold.
+
+### Noticing the cursor
+
+Move the pointer near the Dock and the nearest cat stops, turns to face it, and sits a beat
+later. It does **not** chase the pointer: a cat walking toward the cursor turns a decoration
+into something moving under your hand while you work.
+
+It gives up after 12 seconds however long the pointer stays, so a mouse that simply lives
+near the Dock cannot freeze a cat in a sit all afternoon. Set `"attention": false` to switch
+it off.
+
+### Sleeping on a Dock icon
+
+When a cat decides to sleep it walks to a Dock tile first and sleeps on top of that icon. A
+random tile each time, and no setting: the variety is the point, and a configured favourite
+would break silently the day that app left the Dock.
+
+It gives up after 8 seconds of walking and sleeps where it stands. That is deliberate rather
+than a failure: the Dock is wide, the cat walks at 30 pt/s, and a cat that drew a far tile
+would otherwise spend its whole nap walking and never be seen asleep on anything. Without
+Accessibility there are no tiles to read, so the cat sleeps where it stands, as it always did.
+
+### Reacting to apps
+
+Bring an app to the front and a cat occasionally says something about it. Sixteen apps are
+covered out of the box, keyed on bundle identifier rather than name so a non-English macOS
+still matches. An app with no entry gets silence rather than a generic line.
+
+Rate limiting is the whole of this feature: about an hour between remarks of any kind, four
+hours before the same app may speak again, and switching away and back within a few seconds
+counts as one action. A cat that is kissing, talking, asleep or being petted says nothing,
+and a suppressed remark costs no cooldown. Set `"reactions": false` to switch it off.
+
+## The birthday
+
+Set `birthday` to `"MM-DD"` and, on that morning, the first time the app finds the Dock, the
+two cats stop what they are doing and walk to each other with nothing clicked. They sit, one
+gives the birthday line, confetti falls and hearts rise over the pair, the other answers, and
+then both turn round and walk away. About ten seconds end to end.
+
+The answer is your `dedication` if you have written one, because that is the line actually
+meant to be read. Saying it spends the day's dedication, so the first click of the morning
+does not repeat it.
+
+It happens once. The day is stamped in `state.json` when the scene begins rather than when it
+ends, so a scene interrupted half way does not retry every half second for the rest of the day.
+
+With one cat, or without Accessibility, there is no scene: it needs two cats and a strip to
+walk on.
+
+Because it is ten seconds of screen on one morning a year, it has a self-test:
+
+```sh
+DockPet.app/Contents/MacOS/DockPet --scene-test
+```
+
+It runs the whole scene now, whatever the date, checks all six phases, and asserts that it
+wrote neither once-a-day stamp, so rehearsing it in August cannot silence the real one.
+
 ## Sprites
 
 Sheets are **horizontal strips**: frames laid out left to right, all the same size, with a
@@ -216,7 +303,7 @@ Frame geometry is never hardcoded — it's read from that file.
 Drop your art in either place (the bundle wins if both exist):
 
 - `Resources/sprites/` in this repo — copied into the bundle by `bundle.sh`
-- `~/Library/Application Support/DockPet/sprites/` — survives rebuilds; reachable from
+- `~/Library/Application Support/DockPet/sprites/`: survives rebuilds; reachable from
   the menu bar's **Reveal Sprites Folder**
 
 | File | Required | Notes |
