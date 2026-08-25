@@ -1,5 +1,5 @@
 //
-//  PhrasebookTests.swift — assertions for DockPetCore.Phrasebook (M10, click-to-interact)
+//  PhrasebookTests.swift: assertions for DockPetCore.Phrasebook (M10, click-to-interact)
 //
 //  The phrasebook is the only part of the interaction feature a user actually reads, so
 //  the two things worth pinning down are: the name slot renders sensibly whether or not a
@@ -30,8 +30,8 @@ enum PhrasebookTests {
         eq(Phrasebook.render("{name}, you've got this.", name: "Tiago"), "Tiago, you've got this.",
            "and keeps the sentence as written when there is a name")
 
-        eq(Phrasebook.render("Keep going, {name} — nearly there.", name: nil),
-           "Keep going — nearly there.",
+        eq(Phrasebook.render("Keep going, {name} (nearly there).", name: nil),
+           "Keep going (nearly there).",
            "a slot in the middle leaves no double spacing behind")
 
         eq(Phrasebook.render("Nice to see you, {name}.", name: nil), "Nice to see you.",
@@ -97,9 +97,13 @@ enum PhrasebookTests {
 
         // The no-repeat memory is per prompt: alternating prompts must not make one
         // prompt's last line block the other's.
+        //
+        // The draw count is a coupon-collector budget rather than a round number: covering
+        // a pool of n lines takes about n·H(n) draws on average, so it has to grow with the
+        // pool or this starts failing on the last line rather than on a real bug.
         var mixed = Phrasebook(seed: 11)
         var sawEveryHelloLine = Set<String>()
-        for _ in 0..<60 {
+        for _ in 0..<400 {
             sawEveryHelloLine.insert(mixed.reply(to: .hello, name: nil))
             _ = mixed.reply(to: .fact, name: nil)
         }
