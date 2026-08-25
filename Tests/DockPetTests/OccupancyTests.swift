@@ -1,7 +1,7 @@
 //
-//  OccupancyTests.swift — [M13] who owns a cat right now, and who is allowed to take it.
+//  OccupancyTests.swift: [M13] who owns a cat right now, and who is allowed to take it.
 //
-//  SPEC §9: none of this is visible on screen — a feature that quietly loses a contest it
+//  SPEC §9: none of this is visible on screen, and a feature that quietly loses a contest it
 //  should have won looks exactly like a feature that is simply not very active. So the
 //  contests are decided here, in a table, rather than discovered on the Dock.
 //
@@ -12,7 +12,7 @@ import DockPetCore
 enum OccupancyTests {
 
     static func run() {
-        section("[M13] PetActivity — the priority order")
+        section("[M13] PetActivity: the priority order")
 
         do {
             // Spelled out as a list rather than asserted pairwise: the order *is* the
@@ -39,10 +39,10 @@ enum OccupancyTests {
             check(PetActivity.napSpot < PetActivity.meeting,
                   "walking to a Dock tile yields to actually meeting the other cat")
             check(PetActivity.scene > PetActivity.kiss,
-                  "the birthday scene outranks everything — it happens once a year")
+                  "the birthday scene outranks everything, because it happens once a year")
         }
 
-        section("[M13] PetOccupancy — claiming a single cat")
+        section("[M13] PetOccupancy: claiming a single cat")
 
         do {
             var occupancy = PetOccupancy(petCount: 2)
@@ -52,7 +52,7 @@ enum OccupancyTests {
             check(occupancy.claim(.attention, pets: [0]), "the first claim is granted")
             eq(occupancy.activity(of: 0), .attention, "and is recorded")
             check(!occupancy.isAvailable(0, for: .attention),
-                  "an activity cannot claim a cat it already holds — that would restart it")
+                  "an activity cannot claim a cat it already holds, which would restart it")
         }
 
         do {
@@ -78,7 +78,7 @@ enum OccupancyTests {
             eq(occupancy.activity(of: 1), .napSpot, "both of them")
         }
 
-        section("[M13] PetOccupancy — a claim on the pair is all or nothing")
+        section("[M13] PetOccupancy: a claim on the pair is all or nothing")
 
         do {
             var occupancy = PetOccupancy(petCount: 2)
@@ -86,7 +86,7 @@ enum OccupancyTests {
             check(!occupancy.claim(.meeting, pets: [0, 1]),
                   "so the pair cannot be claimed for a meeting")
             eq(occupancy.activity(of: 0), nil,
-               "and cat 0 is left alone — a half-granted meeting would strand it mid-walk")
+               "and cat 0 is left alone, because a half-granted meeting would strand it mid-walk")
         }
 
         do {
@@ -98,7 +98,7 @@ enum OccupancyTests {
             eq(occupancy.activity(of: 1), .kiss, "and cat 1 is taken in the same breath")
         }
 
-        section("[M13] PetOccupancy — releasing")
+        section("[M13] PetOccupancy: releasing")
 
         do {
             var occupancy = PetOccupancy(petCount: 2)
@@ -112,7 +112,7 @@ enum OccupancyTests {
             var occupancy = PetOccupancy(petCount: 2)
             occupancy.claim(.attention, pets: [0])
             occupancy.claim(.talking, pets: [0])
-            // The attention coordinator does not know it lost — it finds out by releasing
+            // The attention coordinator does not know it lost. It finds out by releasing
             // and being ignored. Without this rule it would take the click's turn away.
             occupancy.release(.attention, pets: [0])
             eq(occupancy.activity(of: 0), .talking,
@@ -125,7 +125,7 @@ enum OccupancyTests {
             eq(occupancy.activity(of: 0), nil, "releasing a cat nobody holds is harmless")
         }
 
-        section("[M13] PetOccupancy — a cast that changes under it")
+        section("[M13] PetOccupancy: a cast that changes under it")
 
         do {
             var occupancy = PetOccupancy(petCount: 2)
@@ -139,7 +139,7 @@ enum OccupancyTests {
         do {
             var occupancy = PetOccupancy(petCount: 1)
             // Every index the app can produce is a real cat, but the app has been wrong
-            // before — an out-of-range read must be an answer, not a crash on her Dock.
+            // before, so an out-of-range read must be an answer, not a crash on her Dock.
             eq(occupancy.activity(of: 7), nil, "an index past the cast is owned by nobody")
             check(!occupancy.isAvailable(7, for: .kiss), "and is never available")
             check(!occupancy.claim(.kiss, pets: [0, 7]),

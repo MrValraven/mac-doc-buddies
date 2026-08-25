@@ -1,5 +1,5 @@
 //
-//  Occupancy.swift — [M13] what owns a cat right now, and who is allowed to take it.
+//  Occupancy.swift: [M13] what owns a cat right now, and who is allowed to take it.
 //
 //  SPEC §5: no AppKit. Deciding whether the cursor may have a cat is a rule, not a
 //  drawing, and rules that live in AppDelegate cannot be checked without a screen (§9).
@@ -7,7 +7,7 @@
 //  ## Why this exists
 //
 //  Through M12 there was exactly one thing that could take a cat away from its behaviour
-//  machine — the kiss — and one guard expressed it: `guard kiss == nil`. M13 adds four
+//  machine (the kiss), and one guard expressed it: `guard kiss == nil`. M13 adds four
 //  more claimants (the cursor, a Dock tile to sleep on, a remark about an app, and the
 //  birthday scene) and each of them can want the same cat at the same moment.
 //
@@ -32,7 +32,7 @@ import Foundation
 ///   * `reacting` is the cat volunteering a remark. It waits its turn behind everything the
 ///     user actually asked for.
 ///   * `meeting` is the two cats' own business, and it sits *below* `talking` and `petted`
-///     because a human reaching for a cat outranks the cat's conversation — and because
+///     because a human reaching for a cat outranks the cat's conversation, and because
 ///     that is already what the app does: `considerMeeting` refuses to start while either
 ///     cat is talking, and a click mid-meeting takes the cat.
 ///   * `talking` and `petted` are the user, directly. Nothing autonomous interrupts them.
@@ -60,7 +60,7 @@ public enum PetActivity: Int, Comparable, CaseIterable, Equatable {
 /// Who currently holds each cat.
 ///
 /// Indices are positions in `AppDelegate`'s `pets` array, so this type never retains a
-/// `Pet` and cannot keep one alive past a cast rebuild — `reset(petCount:)` is how it is
+/// `Pet` and cannot keep one alive past a cast rebuild. `reset(petCount:)` is how it is
 /// told the cast changed.
 public struct PetOccupancy: Equatable {
 
@@ -75,7 +75,7 @@ public struct PetOccupancy: Equatable {
         holders = Array(repeating: nil, count: max(0, petCount))
     }
 
-    /// What owns this cat, or `nil` for nobody — including for an index past the cast.
+    /// What owns this cat, or `nil` for nobody, including for an index past the cast.
     ///
     /// An out-of-range index answers rather than traps. The app has been wrong about its
     /// own indices before (a cast rebuilt mid-kiss is exactly that bug), and the cost of
@@ -88,8 +88,8 @@ public struct PetOccupancy: Equatable {
     /// Could `activity` take this cat right now?
     ///
     /// Strictly outranking, not merely matching: an activity may not claim a cat it
-    /// already holds. Re-claiming would restart a sequence that is already running — the
-    /// cursor crossing a watching cat would reset its watch every mouse-move event — and
+    /// already holds. Re-claiming would restart a sequence that is already running: the
+    /// cursor crossing a watching cat would reset its watch every mouse-move event, and
     /// "I am already doing this" is not a reason to begin again.
     public func isAvailable(_ pet: Int, for activity: PetActivity) -> Bool {
         guard holders.indices.contains(pet) else { return false }
@@ -108,7 +108,7 @@ public struct PetOccupancy: Equatable {
     /// Returns whether the claim was granted.
     @discardableResult
     public mutating func claim(_ activity: PetActivity, pets: [Int]) -> Bool {
-        // An empty claim is a caller bug — most likely a filtered array that came back
+        // An empty claim is a caller bug, most likely a filtered array that came back
         // with nothing. Granting it would hand back `true`, and the caller would go on to
         // run a two-cat sequence with no cats in it.
         guard !pets.isEmpty else { return false }
@@ -120,8 +120,8 @@ public struct PetOccupancy: Equatable {
 
     /// Hand cats back, if `activity` is what is actually holding them.
     ///
-    /// The guard is the whole method. A preempted activity is never told it lost — the
-    /// cursor coordinator finds out only when its own release is quietly ignored — so an
+    /// The guard is the whole method. A preempted activity is never told it lost. The
+    /// cursor coordinator finds out only when its own release is quietly ignored, so an
     /// unconditional release would let it end the click reply that took its cat away, and
     /// the bubble would vanish mid-sentence for reasons nothing on screen could explain.
     public mutating func release(_ activity: PetActivity, pets: [Int]) {
@@ -134,7 +134,7 @@ public struct PetOccupancy: Equatable {
     ///
     /// Settings can add, drop or recolour a cat at any moment, and `Pet` objects are
     /// rebuilt rather than mutated when it does. A claim that survived would name an index
-    /// into an array that has been replaced underneath it — at best a different cat, at
+    /// into an array that has been replaced underneath it: at best a different cat, at
     /// worst one that is no longer on screen. Every claimant already has to cope with
     /// losing its cat mid-sequence (`advanceKiss` abandons on exactly this), so clearing
     /// is both the safe answer and the one they are all written for.

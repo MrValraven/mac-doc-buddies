@@ -74,3 +74,4 @@ tmp/
 scratch/
 .env
 .env.local
+.claude/
