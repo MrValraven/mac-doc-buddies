@@ -86,6 +86,7 @@ enum AnimationSuspension: String {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, SettingsWindowDelegate,
+                         CursorWatcherDelegate, AppWatcherDelegate,
                          PetInteractionDelegate {
 
     /// [M6] Sprite scale, walk speed and pinned screen now come from config.json.
@@ -156,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     private var saveDebounce: Timer?
     /// [M11] Non-nil only while the grant is missing and someone is being shown why.
     private var onboarding: OnboardingWindow?
-    private var paused = false
+    var paused = false
 
     /// Kept alive for the lifetime of the app; a released source stops delivering.
     var reloadSignalSource: DispatchSourceSignal?
@@ -177,6 +178,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
 
     /// [M13] The birthday scene in progress, or `nil`, which is every day but one.
     var scene: SceneInProgress?
+
+    /// [M13] Which cat, if any, is watching the pointer, and how long it has been.
+    var attention = AttentionCoordinator()
+    let cursorWatcher = CursorWatcher()
+
+    /// [M13] Which Dock tile a cat about to sleep should walk to. Seeded like everything
+    /// else in this app that rolls dice (SPEC §9).
+    var napRng = SplitMix64(seed: UInt64.random(in: UInt64.min...UInt64.max))
+
+    /// [M13] What the cats may say about the app she just brought to the front, and how
+    /// long since one of them last did.
+    var reactions = ReactionCoordinator(seed: UInt64.random(in: UInt64.min...UInt64.max))
+    let appWatcher = AppWatcher()
 
     /// [M12] The kiss in progress, or `nil` — which is nearly always. One at a time: the
     /// cast is two cats, and both of them are in it.
@@ -346,6 +360,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         if options.dedicationTest { runDedicationTest() }
         if options.kissTest { runKissTest() }
         if options.sceneTest { runSceneTest() }
+
+        // [M13] Both are event driven and add no timer of their own (SPEC §6). Started
+        // after the self-test modes above, every one of which exits, so a test run never
+        // installs a monitor it will not live long enough to remove.
+        cursorWatcher.delegate = self
+        cursorWatcher.start()
+        appWatcher.delegate = self
+        appWatcher.start()
 
         // [M11] Skipped under a self-test: a test run must not put a window on screen and
         // wait for a human. Skipped when already granted, which is the normal case for me
@@ -935,6 +957,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // dropping a cat from Settings cannot clean up differently.
         // [M12] The hearts are the pair's rather than a pet's, and they own a timer.
         endKiss()
+        // [M13] The scene owns two windows of its own, and neither belongs to a pet, so
+        // nothing on the loop below would take them down.
+        endScene()
+        // [M13] Two more global monitors, installed once for the app rather than per pet.
+        // Same reason as above: a monitor that outlives the app is a callback into a
+        // half-dead one.
+        cursorWatcher.stop()
+        appWatcher.stop()
         for pet in pets { pet.teardown() }
     }
 
@@ -1025,6 +1055,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                     logLocation("pet \(pet.index): \(state.rawValue) on"
                                 + " \(location.screen.localizedName)")
                     pet.applyBehaviorState(state, spriteSet: sprites(for: pet))
+                    // [M13] Just decided to sleep: go and do it on a Dock icon. Noticed
+                    // here because this is where the transition is seen at all, and the
+                    // trip has to start before the sleep pose is what the cat is showing.
+                    if state == .sleep { beginNapTrip(for: pet, on: location) }
+                    if previous == .sleep { endNapTrip(for: pet, reason: "it woke up") }
                 }
                 // [M10] Also here, not only on the animation tick: that timer is suspended
                 // for three of the four states (SPEC §6), so a sitting or sleeping cat
@@ -1047,6 +1082,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             // process must not burn the whole cooldown in one tick — so nothing here tries
             // to compensate for that clamp.
             meetings.advance(by: dt)
+            // [M13] On the poll rather than the animation tick, because this timer is the
+            // one that always runs. The coordinator bounds its own step, so the hour it
+            // counts is an hour of the app actually polling, which stretches while the pet
+            // is paused or dormant. That is the right way round: a cat should not come back
+            // from an hour asleep owing her a remark.
+            reactions.advance(by: dt)
             considerMeeting()
 
             // [M13] After the meeting, not before: on the one morning both could fire, the
@@ -1088,6 +1129,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // announcement, the confetti and the wish, so the frame they sit down on is the one
         // the timer would otherwise stop at, taking the clock that ends the scene with it.
         if scene != nil { return nil }
+        // [M13] A cat watching the pointer is stationary by definition, so without this the
+        // timer stops on the frame it turns to look, taking the clock that ends the episode
+        // with it and leaving the cat staring for good.
+        if attention.isEngaged { return nil }
+        // [M13] And a cat walking to a tile is in `.sleep`, which is stationary, so the
+        // same stop would strand it sliding half way there.
+        if pets.contains(where: { $0.napTrip != nil }) { return nil }
         if pets.allSatisfy({ $0.isStationary(spriteSet: sprites(for: $0)) }) { return .stationary }
         if ProcessInfo.processInfo.isLowPowerModeEnabled { return .lowPowerMode }
         return nil
@@ -1105,6 +1153,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             if scene != nil {
                 print("[scene] abandoned: the animation stopped (\(reason.rawValue))")
                 releaseScene()
+            }
+            for pet in pets where pet.napTrip != nil {
+                endNapTrip(for: pet, reason: "the animation stopped (\(reason.rawValue))")
             }
             suspendAnimation()
             logAnimation("suspended — \(reason.rawValue)")
@@ -1140,12 +1191,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // the phase it lands on this frame is what `moves:` below is asked about.
         advanceKiss(by: dt, on: strip)
         advanceScene(by: dt, on: strip)
+        // [M13] After both pair sequences, so a cat either of them is steering is already
+        // unavailable by the time attention asks for it.
+        advanceAttention(by: dt, on: strip)
 
         // [M11] One timer, every pet. SPEC §6: a second cat must not double the app's
         // wakeups — only the work done inside a wakeup.
         for pet in pets {
+            // [M13] A cat on its way to a tile is walked by the trip, not by its walker:
+            // the walker turns round at the ends of the strip, which is the one thing a cat
+            // crossing the Dock to reach a particular icon must not do.
+            let napDriving = advanceNapTrip(for: pet, by: dt, on: strip)
             pet.advanceAnimation(by: dt, on: strip, spriteSet: sprites(for: pet),
-                                 moves: !isSteered(pet) && !isSteeredByScene(pet))
+                                 moves: !isSteered(pet) && !isSteeredByScene(pet) && !napDriving)
         }
     }
 
@@ -1262,7 +1320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// True only during the approach. Once they are touching, the pair sits — and the walk
     /// away afterwards is an ordinary walk in a reversed direction, which is what makes the
     /// parting look like the cats decided it rather than like a cutscene.
-    private func isSteered(_ pet: Pet) -> Bool {
+    func isSteered(_ pet: Pet) -> Bool {
         guard let kiss, kiss.routine.phase == .approach else { return false }
         return pet === kiss.left || pet === kiss.right
     }

@@ -28,6 +28,13 @@ final class Pet {
     private(set) var view: PetView
 
     var walker: Walker
+
+    /// [M13] The Dock tile this cat is walking to in order to sleep on it, or `nil`.
+    ///
+    /// On the pet rather than on AppDelegate because both cats can be making the trip at
+    /// once, independently: they have separate behaviour clocks, so they decide to sleep at
+    /// different moments and pick different tiles.
+    var napTrip: NapTrip?
     var behavior: BehaviorMachine
     var sequencer: FrameSequencer
     var size: CGSize
