@@ -75,6 +75,36 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
     private var mouseMonitor: Any?
     private var menuIsOpen = false
 
+    /// [M13] True while a mouse button is down on the cat, whatever the press turns out to
+    /// be. Its only job is to pin `updateClickThrough`; see the guard there.
+    private var isPressed = false
+
+    /// [M13] True while the cat is being petted: sitting, purring, indicator up.
+    private(set) var isPurring = false
+
+    /// When the purr started, on the same monotonic clock `PetView` timed the press with.
+    /// The elapsed time is computed here and handed to `Purr` (pure), which is where every
+    /// decision about it is taken.
+    private var purrStarted: CFTimeInterval?
+
+    /// Redraws the indicator once per `Purr.beat`, and invalidates itself the moment the
+    /// hand comes off.
+    ///
+    /// A timer of its own for the reason `HeartsWindow` has one (SPEC §6): the app-wide
+    /// animation timer suspends when every pet is stationary, and a petted cat is sitting,
+    /// so the one moment this indicator exists is exactly the moment that timer is
+    /// entitled to stop. It adds no steady-state wakeups, which is what §6 protects.
+    private var purrTimer: Timer?
+
+    /// What the pet was doing when the hand landed, so it can be put back afterwards.
+    ///
+    /// Read from `PetView.state` rather than asked of the delegate: the view's state is
+    /// set from the pet's behaviour state by `Pet.applyBehaviorState` and is the same
+    /// value, so this needs no addition to `PetInteractionDelegate` and cannot answer for
+    /// the wrong cat, which is the trap [M11] documents on every other member of that
+    /// protocol.
+    private var stateBeforePurr: PetState?
+
     /// [M11] True under `--interaction-test` and the other self-tests. A test run must not
     /// consume the once-a-day dedication or swap in a birthday greeting — it would spend
     /// the one thing this feature exists to deliver, on a day nobody would connect to the
@@ -107,6 +137,13 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
     /// a new PetView, and an interaction still pointing at the old one would leave the cat
     /// unclickable with no visible sign of why.
     func attach(to view: PetView, in window: PetWindow) {
+        // [M13] A rebuild in the middle of a hold: Settings changing the coat or the scale
+        // replaces the whole view, and the one the finger is on is about to stop existing.
+        // Ended here rather than left to the old view, because the cat that comes back is
+        // a different object and would otherwise inherit a purr nobody is still asking
+        // for, with the old view's `.sit` frozen in place and no press left to release it.
+        endPetting()
+
         self.view = view
         self.window = window
         view.clickDelegate = self
@@ -128,6 +165,15 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
 
         // A menu closes on its own terms; taking events away mid-track would strand it.
         guard !menuIsOpen else { return }
+
+        // [M13] Nor while a button is down on the cat. Three things move the pet relative
+        // to the pointer during a press (the cursor, the cat's own walking, and the Dock
+        // resizing under both), and any of them turning the window click-through mid-press
+        // would take the mouse-up with it: the menu would silently fail to open on a
+        // perfectly ordinary click, and a hold would never hear that it had been released.
+        // The press is a bounded event with a guaranteed end (`petViewPressEnded`, which
+        // calls straight back into here), so pinning it is not a leak.
+        guard !isPressed else { return }
 
         let mouse = NSEvent.mouseLocation
         guard window.isVisible, window.frame.contains(mouse) else {
@@ -159,6 +205,12 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
     }
 
     func stopMouseTracking() {
+        // [M13] The cat being torn down mid-hold. `Pet.teardown` calls this first, so it
+        // is the one place every disappearance of a pet passes through: a dropped cast
+        // (Settings rebuilding the pets), a quit, or a config reload. Without it the purr
+        // timer would outlive its cat and the window would stay pinned open.
+        endPetting()
+
         if let monitor = mouseMonitor { NSEvent.removeMonitor(monitor) }
         mouseMonitor = nil
         window?.ignoresMouseEvents = true
@@ -228,6 +280,130 @@ final class PetInteraction: NSObject, PetViewClickDelegate, NSMenuDelegate {
         guard let raw = sender.representedObject as? String,
               let prompt = PetPrompt(rawValue: raw) else { return }
         say(prompt)
+    }
+
+    // MARK: - [M13] Petting
+
+    /// A press landed on the art, and nobody knows yet what it is.
+    ///
+    /// Nothing visible happens here on purpose. A press that turns out to be an ordinary
+    /// click must leave no trace at all, so the cat neither sits nor shows anything until
+    /// `Purr` says the press has become a hold.
+    func petViewPressBegan(_ view: PetView) {
+        isPressed = true
+    }
+
+    /// The press crossed `Purr.holdThreshold`: sit the cat down and start purring.
+    func petViewHoldBegan(_ view: PetView) {
+        guard !isPurring else { return }
+
+        // The cat torn down or rebuilt in the fraction of a second between the button
+        // going down and the threshold. `Pet.teardown` closes the window and `applySprites`
+        // replaces the view, but neither can reach inside `PetView` to cancel the one-shot
+        // timer already in flight, so this is where a hold for a cat that is no longer on
+        // the Dock is refused. Without it the indicator would appear over an empty stretch
+        // of Dock, belonging to nothing.
+        guard view === self.view, window?.isVisible == true else { return }
+
+        isPurring = true
+        purrStarted = CACurrentMediaTime()
+        stateBeforePurr = self.view?.state
+
+        // [M13] A hold that starts while the pet is already talking. The sentence goes,
+        // and it does not come back: two things above one 32 px cat is the rule the kiss
+        // already follows (SPEC §7 M12, "one bubble at a time"), and a reply that resumed
+        // after the hand came off would arrive seconds late, answering a menu item the
+        // user has long since stopped thinking about. `showBubble` below dismisses it for
+        // us, which also clears `isTalking` before it is set again for the indicator.
+        //
+        // Requirement 4: the cat sits, and stops walking. `.sit` is stationary, so the
+        // existing "only walking moves the pet" rule in `Pet.advanceAnimation` does the
+        // stopping without a second switch for it, and `isTalking` (set by `showBubble`)
+        // holds the behaviour clock still so the pose lasts as long as the hand does.
+        delegate?.interactionForcePetState(.sit, for: self)
+
+        refreshPurrIndicator()
+
+        let timer = Timer(timeInterval: Purr.beat, repeats: true) { [weak self] _ in
+            self?.refreshPurrIndicator()
+        }
+        // `.common`, per SPEC §8 trap 3, like every other timer in the app.
+        RunLoop.main.add(timer, forMode: .common)
+        purrTimer = timer
+
+        // SPEC §9: this is a feature whose entire visible form is a cat sitting still, so
+        // the log is the only way anyone not looking at the screen can tell it happened.
+        print("[pet] being petted")
+    }
+
+    /// The press ended, however it ended.
+    func petViewPressEnded(_ view: PetView) {
+        endPetting()
+    }
+
+    /// Put the indicator up, or refresh what it says.
+    ///
+    /// Goes through `showBubble` rather than adding a second way to put text over a cat,
+    /// for the reason that method is not private (see its own note): two of them would
+    /// drift, and this one would be the one that forgot about screen edges, the tail, or
+    /// the pet being rebuilt underneath it. The visible cost is that each beat fades a
+    /// fresh bubble in over 0.12 s, which on a purr reads as a pulse rather than a glitch,
+    /// and is the reason `Purr.beat` is half a second rather than a frame.
+    private func refreshPurrIndicator() {
+        guard isPurring, let started = purrStarted else { return }
+
+        // A last line of defence for a mouse-up that never arrived. `PetView` already
+        // re-checks the button at the threshold and ends the press when the pointer leaves
+        // the art, but a purring cat is a cat held out of its own behaviour machine, and
+        // the one bug worth spending a branch on here is the one that never ends.
+        guard NSEvent.pressedMouseButtons & 1 != 0 else {
+            endPetting()
+            return
+        }
+
+        guard let text = Purr.indicator(heldFor: CACurrentMediaTime() - started) else { return }
+        showBubble(text)
+    }
+
+    /// End a press and, if it had become one, the purr with it.
+    ///
+    /// Idempotent, and called from four places that can each happen without the others:
+    /// the button coming up, the pointer leaving the cat, the view being rebuilt
+    /// (`attach`), and the cat being torn down (`stopMouseTracking`). Anything that can
+    /// end a hold has to be able to call this without checking whether one is running.
+    private func endPetting() {
+        guard isPressed || isPurring else { return }
+
+        isPressed = false
+
+        if isPurring {
+            isPurring = false
+            purrTimer?.invalidate()
+            purrTimer = nil
+
+            let held = purrStarted.map { CACurrentMediaTime() - $0 } ?? 0
+            purrStarted = nil
+
+            dismissBubble()
+
+            // Back to what it was doing. `force` rolls a fresh dwell, so a cat that was
+            // walking gets up and walks on, and one that was asleep goes back to sleep
+            // rather than being woken by the attention. Left alone when the state is
+            // unknown (no view attached), because forcing a guess would be the app
+            // inventing a mood for the pet.
+            let restored = stateBeforePurr
+            stateBeforePurr = nil
+            if let state = restored {
+                delegate?.interactionForcePetState(state, for: self)
+            }
+
+            print(String(format: "[pet] petted for %.1fs, back to %@", held,
+                         restored?.rawValue ?? "itself"))
+        }
+
+        // The window was pinned for the length of the press; hand it back to the ordinary
+        // cursor rule now.
+        updateClickThrough()
     }
 
     /// Answer a prompt: pick the words, stop the pet, and put the bubble up.

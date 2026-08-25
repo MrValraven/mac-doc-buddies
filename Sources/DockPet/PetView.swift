@@ -14,9 +14,34 @@ import CoreGraphics
 import DockPetCore
 
 /// Told when the pet itself is clicked. [M10]
+///
+/// [M13] And when it is *held*. A press on the cat is now two possible gestures and the
+/// view cannot know which one it is at the moment the button goes down, so it reports the
+/// press as it develops and `Purr` (pure) decides what each stage means. The click
+/// callback survives unchanged and still means exactly what it did: open the prompt menu.
 protocol PetViewClickDelegate: AnyObject {
     /// `point` is in the view's own coordinates, which is where the menu should open.
+    ///
+    /// [M13] Now sent on mouse *up* rather than mouse down, because until the button comes
+    /// up there is no way to tell a click from the start of a hold. Everything downstream
+    /// of it is unchanged.
     func petView(_ view: PetView, wasClickedAt point: NSPoint)
+
+    /// A press landed on the art. Not yet a click and not yet a hold. The point of this
+    /// callback is that the delegate can stop the pet's window from going click-through
+    /// underneath a press it is in the middle of, which would eat the mouse-up and with it
+    /// the menu. See `PetInteraction.updateClickThrough`.
+    func petViewPressBegan(_ view: PetView)
+
+    /// The press has been held past `Purr.holdThreshold` with the pointer still on the
+    /// cat: start purring.
+    func petViewHoldBegan(_ view: PetView)
+
+    /// The press is over, however it ended: button up, pointer slid off the cat, or the
+    /// view taken out from under it. Always sent, exactly once per `petViewPressBegan`,
+    /// and always before the click callback above, so the delegate never has to unpick the
+    /// two orders.
+    func petViewPressEnded(_ view: PetView)
 }
 
 final class PetView: NSView {
@@ -170,13 +195,143 @@ final class PetView: NSView {
     /// opening the menu.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // MARK: - [M13] Press, or hold
+
+    /// When the live press started, on the monotonic media clock. `nil` when no button is
+    /// down on the cat.
+    ///
+    /// `CACurrentMediaTime` rather than `Date`: it does not jump when the wall clock is
+    /// corrected, and a clock correction mid-press would otherwise decide the gesture.
+    /// This is the only clock read in the feature, and everything it is read *for* is
+    /// decided by `Purr`, which takes the elapsed time as a parameter (SPEC §9).
+    private var pressStarted: CFTimeInterval?
+
+    /// Where the press landed, in view coordinates. The menu opens here rather than at
+    /// wherever the pointer ended up, so a press that drifts two points still puts the
+    /// menu where the user aimed.
+    private var pressPoint: NSPoint = .zero
+
+    /// Fires once, at the threshold, and is invalidated the moment it fires or the press
+    /// ends. SPEC §6 forbids a repeating steady-state timer, not a one-shot that exists
+    /// only while a finger is down, which is the licence `HeartsWindow` runs under.
+    private var holdTimer: Timer?
+
     override func mouseDown(with event: NSEvent) {
         let local = convert(event.locationInWindow, from: nil)
         guard isOverSprite(local) else {
             super.mouseDown(with: event)
             return
         }
-        clickDelegate?.petView(self, wasClickedAt: local)
+        beginPress(at: local)
+    }
+
+    /// A drag that leaves the art ends the press.
+    ///
+    /// This is the "pointer left the cat mid-hold" case, and it has to be handled here:
+    /// once `mouseDown` is accepted, AppKit delivers the whole drag to this view whether
+    /// or not the pointer is still over it, so nothing else will notice. Sliding your hand
+    /// off a cat stops petting it, and a press that slides off before the threshold is a
+    /// click the user backed out of, and `Purr.release` distinguishes the two.
+    override func mouseDragged(with event: NSEvent) {
+        guard pressStarted != nil else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let local = convert(event.locationInWindow, from: nil)
+        if !isOverSprite(local) { endPress(overPet: false) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard pressStarted != nil else {
+            super.mouseUp(with: event)
+            return
+        }
+        endPress(overPet: isOverSprite(convert(event.locationInWindow, from: nil)))
+    }
+
+    /// The view being pulled out from under a live press: a coat or scale change rebuilds
+    /// `PetView` (`Pet.applySprites`), and `Pet.teardown` drops the cat entirely.
+    ///
+    /// Without this the press would stay open on a view that will never see another mouse
+    /// event, and its delegate would be left purring for a cat that is no longer on the
+    /// Dock. Ended as "not over the pet", so a half-formed press cannot pop a menu up out
+    /// of a rebuild.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil, pressStarted != nil { endPress(overPet: false) }
+    }
+
+    private func beginPress(at point: NSPoint) {
+        // Defensive: a mouse-up can go missing if the window stopped taking events
+        // mid-press. Closing the stale press before opening a new one keeps the delegate's
+        // began/ended pairs matched.
+        if pressStarted != nil { endPress(overPet: false) }
+
+        pressStarted = CACurrentMediaTime()
+        pressPoint = point
+        clickDelegate?.petViewPressBegan(self)
+
+        let timer = Timer(timeInterval: Purr.holdThreshold, repeats: false) { [weak self] _ in
+            self?.holdThresholdReached()
+        }
+        // `.common`, per SPEC §8 trap 3: in `.default` this timer stalls during menu
+        // tracking and live resize, and a hold that silently never starts is worse than
+        // one that starts late.
+        RunLoop.main.add(timer, forMode: .common)
+        holdTimer = timer
+    }
+
+    /// The press has lasted long enough to be a hold, if it is still a press and still
+    /// on the cat.
+    ///
+    /// Both re-checks matter. The cat *walks*: at the default 30 pt/s it covers about 10
+    /// points in the threshold, which is enough to step out from under a stationary
+    /// pointer near the edge of the sprite. And the button may already be up: the window
+    /// can be turned click-through by something else mid-press, and a lost mouse-up must
+    /// not leave a cat purring at nobody.
+    private func holdThresholdReached() {
+        holdTimer = nil
+        guard pressStarted != nil else { return }
+        guard NSEvent.pressedMouseButtons & 1 != 0, cursorIsOverSprite else {
+            endPress(overPet: false)
+            return
+        }
+        clickDelegate?.petViewHoldBegan(self)
+    }
+
+    /// Is the pointer over solid art *right now*, wherever it has got to?
+    ///
+    /// Read from `NSEvent.mouseLocation` rather than from an event, because the moment
+    /// this is asked is a timer firing, not a mouse event arriving.
+    private var cursorIsOverSprite: Bool {
+        guard let window = window else { return false }
+        let local = convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        return isOverSprite(local)
+    }
+
+    /// Close the press and act on what it turned out to be.
+    ///
+    /// The ordering is deliberate: the delegate hears the press ended *before* the menu is
+    /// opened. `NSMenu.popUp` runs a modal tracking loop that does not return until the
+    /// menu is dismissed, so a delegate told afterwards would spend the whole life of the
+    /// menu believing a finger was still on the cat.
+    private func endPress(overPet: Bool) {
+        guard let started = pressStarted else { return }
+        holdTimer?.invalidate()
+        holdTimer = nil
+        pressStarted = nil
+
+        let outcome = Purr.release(after: CACurrentMediaTime() - started, overPet: overPet)
+        clickDelegate?.petViewPressEnded(self)
+
+        switch outcome {
+        case .menu:
+            clickDelegate?.petView(self, wasClickedAt: pressPoint)
+        case .endPurr, .nothing:
+            // `petViewPressEnded` above is what takes a purr down; there is nothing else
+            // a press that was not a click has to do.
+            break
+        }
     }
 
     /// The current frame's clickable region, drawn as text.
