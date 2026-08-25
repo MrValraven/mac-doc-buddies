@@ -207,19 +207,19 @@ extension Phrasebook {
     public static let loveLine = MeetingLine(opener: "I love you", reply: "And I love youu")
 
     public static let meetingPairs: [MeetingLine] = [
-        MeetingLine(opener: "Oh — hello, {name}.",
-                    reply: "Hello yourself, {name}."),
-        MeetingLine(opener: "Fancy meeting you here, {name}.",
-                    reply: "It's a narrow Dock. It was always going to happen."),
+        MeetingLine(opener: "There you are, {name}.",
+                    reply: "Here I am. Hello, {name}."),
+        MeetingLine(opener: "I was hoping it would be you, {name}.",
+                    reply: "I came the long way, just in case it was you."),
         MeetingLine(opener: "You're in my spot, {name}.",
-                    reply: "It's a very good spot."),
+                    reply: "Then we'll share the spot."),
         MeetingLine(opener: "Any plans today, {name}?",
-                    reply: "Sitting. Possibly some lying down."),
+                    reply: "Sitting near you, mostly."),
         MeetingLine(opener: "I walked all the way from the other end.",
-                    reply: "I know, {name}. I watched."),
+                    reply: "I know, {name}. I watched the whole way."),
         MeetingLine(opener: "Did you know there are two of us now?",
-                    reply: "I had noticed, {name}."),
+                    reply: "I count us every morning, {name}."),
         MeetingLine(opener: "Race you back, {name}.",
-                    reply: "No."),
+                    reply: "Let's walk it instead, so it lasts longer."),
     ]
 }

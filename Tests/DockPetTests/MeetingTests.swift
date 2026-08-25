@@ -144,8 +144,8 @@ enum MeetingTests {
         }
 
         do {
-            // [R-review] seed 10 lands on meetingPairs[0], "Oh — hello, {name}." /
-            // "Hello yourself, {name}." — a pair with {name} in *both* halves, so a name
+            // [R-review] seed 10 lands on meetingPairs[0], "There you are, {name}." /
+            // "Here I am. Hello, {name}." A pair with {name} in *both* halves, so a name
             // swap inside meet() cannot hide behind a slot-free line. This replaces a
             // check that could never fail regardless of which name went where.
             var coordinator = MeetingCoordinator(seed: 10)
