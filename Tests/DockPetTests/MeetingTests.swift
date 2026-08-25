@@ -43,6 +43,20 @@ enum MeetingTests {
         eq(Occasion.isBirthday(date(2024, 2, 29), birthday: "02-29", calendar: utc), true,
            "a leap day matches on a leap year")
 
+        section("[M11] Occasion — parse boundaries")
+
+        eq(Occasion.parse("13-01") == nil, true, "a month above 12 is not a date")
+        eq(Occasion.parse("00-15") == nil, true, "a month below 1 is not a date")
+        eq(Occasion.parse("01-32") == nil, true, "a day above 31 is not a date")
+        // Deliberate looseness, pinned rather than tightened: the range check is generic
+        // (1...31), not per-month, so "02-30" parses even though no such date exists.
+        // isBirthday compares against real DateComponents, so an impossible date simply
+        // never matches a real day — cheaper than a calendar-aware check for the same result.
+        check(Occasion.parse("02-30") != nil,
+              "02-30 parses: the range check is generic, not per-month — a date that cannot "
+              + "occur simply never matches a real day, which is cheaper than a "
+              + "calendar-aware check")
+
         section("[M11] Occasion — day stamps")
 
         eq(Occasion.dayStamp(date(2026, 8, 27), calendar: utc), "2026-08-27",
@@ -126,11 +140,20 @@ enum MeetingTests {
             check(!exchange.reply.isEmpty, "the reply is not empty")
             check(!exchange.opener.contains(Phrasebook.nameSlot), "the opener's slot is filled")
             check(!exchange.reply.contains(Phrasebook.nameSlot), "the reply's slot is filled")
-            // The opener addresses the replier and vice versa — that is the whole point of
-            // the two names being separate parameters.
-            check(!exchange.opener.contains("Mochi") || exchange.reply.contains("Tigre")
-                  || !exchange.opener.contains(Phrasebook.nameSlot),
-                  "each line addresses the other cat")
+        }
+
+        do {
+            // [R-review] seed 10 lands on meetingPairs[0], "Oh — hello, {name}." /
+            // "Hello yourself, {name}." — a pair with {name} in *both* halves, so a name
+            // swap inside meet() cannot hide behind a slot-free line. This replaces a
+            // check that could never fail regardless of which name went where.
+            var coordinator = MeetingCoordinator(seed: 10)
+            guard let exchange = coordinator.meet(left, touching,
+                                                  openerName: "Mochi", replierName: "Tigre") else {
+                Harness.bail("expected an exchange from a fresh coordinator")
+            }
+            check(exchange.opener.contains("Tigre"), "the opener addresses the replier")
+            check(exchange.reply.contains("Mochi"), "the reply addresses the opener")
         }
 
         do {
