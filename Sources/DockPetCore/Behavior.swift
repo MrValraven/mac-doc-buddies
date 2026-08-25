@@ -83,6 +83,12 @@ public struct Walker: Equatable {
     public mutating func clamp(to maxDistance: CGFloat) {
         distance = min(max(0, distance), max(0, maxDistance))
     }
+
+    /// [M11] Turn around where you stand. Used when two pets meet: they part rather than
+    /// walking through each other.
+    public mutating func reverse() {
+        direction = direction.reversed
+    }
 }
 
 // MARK: - State machine (M5)

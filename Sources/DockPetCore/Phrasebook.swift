@@ -171,3 +171,39 @@ public struct Phrasebook {
         return Self.render(pool[index], name: name)
     }
 }
+
+/// [M11] Half of a conversation and its answer.
+///
+/// A pair rather than two independent draws: a reply that does not answer the line is
+/// worse than no reply. `{name}` in each half is the *other* cat's name, which is why the
+/// M10 render rules apply unchanged — a cat with no name is exactly the "no name" case
+/// those rules already handle.
+public struct MeetingLine: Equatable {
+    public let opener: String
+    public let reply: String
+
+    public init(opener: String, reply: String) {
+        self.opener = opener
+        self.reply = reply
+    }
+}
+
+extension Phrasebook {
+
+    public static let meetingPairs: [MeetingLine] = [
+        MeetingLine(opener: "Oh — hello, {name}.",
+                    reply: "Hello yourself, {name}."),
+        MeetingLine(opener: "Fancy meeting you here, {name}.",
+                    reply: "It's a narrow Dock. It was always going to happen."),
+        MeetingLine(opener: "You're in my spot, {name}.",
+                    reply: "It's a very good spot."),
+        MeetingLine(opener: "Any plans today, {name}?",
+                    reply: "Sitting. Possibly some lying down."),
+        MeetingLine(opener: "I walked all the way from the other end.",
+                    reply: "I know, {name}. I watched."),
+        MeetingLine(opener: "Did you know there are two of us now?",
+                    reply: "I had noticed, {name}."),
+        MeetingLine(opener: "Race you back, {name}.",
+                    reply: "No."),
+    ]
+}

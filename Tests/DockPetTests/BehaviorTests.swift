@@ -104,6 +104,17 @@ enum BehaviorTests {
         w = Walker(speed: 0)
         w.advance(by: 0.2, maxDistance: maxDistance)
         eq(w.distance, 0, "zero speed does not move")
+
+        section("[M11] Walker.reverse")
+
+        do {
+            var walker = Walker(distance: 50, direction: .forward, speed: 30)
+            walker.reverse()
+            eq(walker.direction == .backward, true, "reverse turns a forward walker around")
+            eq(walker.distance, 50, "and does not move it")
+            walker.reverse()
+            eq(walker.direction == .forward, true, "reversing twice restores the direction")
+        }
     }
 }
 
