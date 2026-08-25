@@ -374,6 +374,36 @@ enum RenderTest {
             check(crisp, "\(Int(m.devicePixelsPerArtPixel(scale: scale, backingScaleFactor: screen.backingScaleFactor))) whole device px per art px on \"\(screen.localizedName)\"")
         }
 
+        // --- [M13] which poses can face a direction at all ----------------------------
+        //
+        // The cursor-attention feature asks a cat to turn and look at the pointer, and it
+        // can only do that in a pose the view will actually mirror. Which poses those are
+        // is a property of the *art*, not of the wiring: idle and sit are drawn front-on
+        // on purpose (see makesprite.swift, "a cat that stops walking turns to look at
+        // you"), so setting `facing` on them is a no-op by design.
+        //
+        // Pinned here because nothing else would catch it. Setting `facing` on a front-on
+        // pose is silent: no warning, no log line, and a cat that stops but never turns
+        // looks exactly like a cat whose turn is simply subtle.
+        print("\n[M13] which poses have a direction")
+        if let idleLeft = render(view, frame: 0, facing: .left, state: .idle),
+           let idleRight = render(view, frame: 0, facing: .right, state: .idle) {
+            check(!differs(idleLeft, idleRight),
+                  "idle renders identically either way: it is a front-on pose with no left"
+                    + " or right, so nothing can make it face the cursor")
+        }
+        if let sitLeft = render(view, frame: 0, facing: .left, state: .sit),
+           let sitRight = render(view, frame: 0, facing: .right, state: .sit) {
+            check(!differs(sitLeft, sitRight),
+                  "and so does sit, for the same reason")
+        }
+        if let walkLeft = render(view, frame: 0, facing: .left, state: .walk),
+           let walkRight = render(view, frame: 0, facing: .right, state: .walk) {
+            check(differs(walkLeft, walkRight),
+                  "the walk sheet is the one drawn in profile, so it is the only pose that"
+                    + " can be pointed at anything")
+        }
+
         checkRecolouring()
 
         print("")

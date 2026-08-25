@@ -140,8 +140,12 @@ final class Pet {
     /// cover twice the ground and turn round at the ends of the strip on the way — the one
     /// thing a cat crossing the Dock to meet another must not do. Everything else about the
     /// frame — the sheet, the bubble, click-through — still happens.
+    /// [M14] `spritePace` speeds the sheet up without touching the clock that drives it:
+    /// the kiss's approach is a run, and the walk cycle has to keep up with the ground the
+    /// cat is covering. Only the sheet is scaled: the bubble, the click-through mask and
+    /// everything else still happen once per real frame.
     func advanceAnimation(by dt: TimeInterval, on strip: WalkStrip, spriteSet: SpriteSet?,
-                          moves: Bool = true) {
+                          moves: Bool = true, spritePace: Double = 1) {
         // [M6] Only walking moves the pet. A sit or sleep animation still plays below.
         if moves, behavior.state.isMoving {
             walker.advance(by: dt, maxDistance: Geometry.maximumDistance(for: size, on: strip))
@@ -151,7 +155,7 @@ final class Pet {
         position(on: strip)
 
         // The sheet plays at its own fps, independent of the timer's rate.
-        sequencer.advance(by: dt)
+        sequencer.advance(by: dt * max(0, spritePace))
         view.frameIndex = sequencer.index
 
         // [M10] Two things move the cat relative to the cursor: the cursor, which the

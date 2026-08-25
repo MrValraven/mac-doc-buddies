@@ -780,14 +780,14 @@ so two cats can be told apart in the log; and `--interaction-test --shot=` rende
 **If the deadline arrives first, cut 11e.** Two cats simply coexisting on the Dock is
 already the thing that was being built. A ragged meeting is worse than no meeting.
 
-**M12 — The kiss.** One meeting in five, and any time you ask for it, the two cats walk to
+**M12 — The kiss.** One meeting in five, and any time you ask for it, the two cats run to
 each other and kiss instead of trading a line.
 
 - `Kiss.swift` is pure, in `DockPetCore`, and owns both halves that can be checked without a
   screen: `KissRoutine` — the phases and their clock — and `HeartDrift` — where each heart is
   and how solid, at a moment in the kiss. `AppDelegate` applies them; it decides nothing
   about timing itself.
-- The sequence: **approach** (both walk to the point between them, facing each other) →
+- The sequence: **approach** (both run to the point between them, facing each other) →
   **announce** (the left-hand cat says *"Bisou, bisou!"* in the ordinary bubble) → **kiss**
   (bubble down, four hearts rise and fade) → **declare** (hearts down, the left-hand cat says
   *"I love you"*) → **reply** (that bubble down, the right-hand cat answers *"And I love
@@ -800,6 +800,19 @@ each other and kiss instead of trading a line.
   which is the one thing a cat crossing the Dock to meet another must not do. It shares the
   bounded step and the clamp to the strip, because a stalled timer and a shrinking Dock are
   no less real during a kiss.
+- **[M14] amendment: the approach is a run, not a stroll.** Two cats that have decided to
+  kiss and then amble over at patrol speed read as two cats who happened to end up in the
+  same place. `walk(toward:)` takes a `speedMultiplier`, and the approach passes
+  `KissRoutine.approachSpeedMultiplier` (2.5x), a multiple of the pet's own speed, so the
+  Settings slider still governs how fast a cat is. It multiplies the *speed*, never the time
+  step: `maximumStep` is a ceiling on how much time one tick may account for, and stretching
+  `dt` would let a running cat teleport further than a walking one on a stalled timer. It is
+  passed per call rather than written into `walker.speed`, so a kiss abandoned mid-approach
+  cannot leave a cat sprinting for the rest of the session. The legs keep up with the ground:
+  there is no run sheet to swap to, so the walk sheet plays at the same multiple of its own
+  frame rate for the two cats being steered, and at its ordinary rate for everyone else.
+  Only the approach: the parting walk is an ordinary walk, which is what makes it read as
+  the cats deciding it rather than as a cutscene.
 - **The approach has a ten-second ceiling.** The strip can move, shrink or vanish under the
   pair mid-walk, and a routine with no way to give up would hold both cats out of their own
   behaviour machine forever. An abandoned kiss says so in the log.

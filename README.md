@@ -187,8 +187,9 @@ occasional event rather than a running commentary.
 Roughly one meeting in five becomes a kiss instead of a conversation, and you can ask for
 one at any time from either cat's click menu — **Kiss the other cat**.
 
-The two walk to the point between them, whatever else they were doing, and stop when they
-touch. The left-hand one says *"Bisou, bisou!"*, the bubble comes down, and four hearts rise
+The two run to the point between them, whatever else they were doing, at two and a half
+times their usual speed with their legs going to match, and stop when they touch. The
+left-hand one says *"Bisou, bisou!"*, the bubble comes down, and four hearts rise
 and fade over the pair. Then the same cat says *"I love you"*, the other answers *"And I love
 youu"*, and both turn around and walk away. About nine seconds end to end.
 

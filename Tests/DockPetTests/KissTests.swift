@@ -65,6 +65,53 @@ enum KissTests {
             eq(walker.distance, 0, "which is distance zero")
         }
 
+        section("[M14] Walker: running rather than strolling")
+
+        do {
+            check(KissRoutine.approachSpeedMultiplier > 1,
+                  "a pair asked to kiss runs at each other rather than strolling over")
+        }
+
+        do {
+            var walker = Walker(distance: 0, direction: .forward, speed: 30)
+            walker.walk(toward: 300, by: 1, maxDistance: 600, speedMultiplier: 2)
+            eq(walker.distance, 15, "twice the speed covers twice the ground in one step")
+        }
+
+        do {
+            var walker = Walker(distance: 0, direction: .forward, speed: 30)
+            walker.walk(toward: 300, by: 1, maxDistance: 600, speedMultiplier: 1)
+            eq(walker.distance, 7.5, "and a multiplier of one is the walk it always was")
+        }
+
+        do {
+            var walker = Walker(distance: 95, direction: .forward, speed: 30)
+            let arrived = walker.walk(toward: 100, by: 1, maxDistance: 600, speedMultiplier: 4)
+            eq(arrived, true, "a running step longer than the gap is still arrival")
+            eq(walker.distance, 100, "and it lands on the target rather than overshooting it")
+        }
+
+        do {
+            var walker = Walker(distance: 0, direction: .forward, speed: 30)
+            walker.walk(toward: 600, by: 60, maxDistance: 600, speedMultiplier: 2)
+            eq(walker.distance, 30 * 2 * CGFloat(Walker.maximumStep),
+               "a stalled timer covers one bounded step of running, not the length of the Dock")
+        }
+
+        do {
+            var walker = Walker(distance: 300, direction: .forward, speed: 30)
+            walker.walk(toward: 0, by: 1, maxDistance: 600, speedMultiplier: 3)
+            eq(walker.distance, 277.5, "running backward is running too")
+            eq(walker.direction, .backward, "and facing still follows the target")
+        }
+
+        do {
+            var walker = Walker(distance: 40, direction: .forward, speed: 30)
+            eq(walker.walk(toward: 10, by: 1, maxDistance: 0, speedMultiplier: 5), true,
+               "and a strip with no room to run parks the pet at the near end all the same")
+            eq(walker.distance, 0, "which is distance zero")
+        }
+
         section("[M12] KissRoutine — the six phases")
 
         /// Run the routine forward in animation-sized steps.

@@ -101,9 +101,21 @@ public struct Walker: Equatable {
     /// `target` is clamped to the strip rather than refused: the midpoint between two cats
     /// is derived from live frames, and a Dock that shrinks mid-approach must leave them
     /// walking to the nearest reachable point rather than to a place that no longer exists.
+    ///
+    /// [M14] `speedMultiplier` is how the kiss makes the pair *run* at each other instead
+    /// of strolling over. It multiplies the speed rather than the time step on purpose:
+    /// `maximumStep` is a ceiling on how much *time* one tick may account for, so a stalled
+    /// timer covers a quarter-second of running here, and stretching `dt` instead would
+    /// quietly raise that ceiling and let a running cat teleport further than a walking one
+    /// ever could.
+    ///
+    /// Passed per call rather than kept in `speed`, which belongs to the user's config: a
+    /// kiss that ended between the two writes, whether abandoned or with the cast rebuilt
+    /// mid-approach, would leave a cat running for the rest of the session.
     @discardableResult
     public mutating func walk(toward target: CGFloat, by dt: TimeInterval,
-                              maxDistance: CGFloat) -> Bool {
+                              maxDistance: CGFloat,
+                              speedMultiplier: CGFloat = 1) -> Bool {
         let limit = max(0, maxDistance)
 
         // The same answer `advance` gives a strip with no room: park at the near end. A
@@ -116,7 +128,7 @@ public struct Walker: Equatable {
 
         let goal = min(max(0, target), limit)
 
-        let step = CGFloat(min(max(0, dt), Self.maximumStep)) * speed
+        let step = CGFloat(min(max(0, dt), Self.maximumStep)) * speed * max(0, speedMultiplier)
         let gap = goal - distance
 
         // Arrival covers both "already there" and "this step would overshoot". Landing on

@@ -49,6 +49,19 @@ public struct KissRoutine: Equatable {
     /// than the widest Dock takes to cross at the default 30 pt/s.
     public static let approachCeiling: TimeInterval = 10
 
+    /// [M14] How much faster than its own walking speed each cat covers the approach.
+    ///
+    /// They *run* at each other: two cats that have decided to kiss and then amble over at
+    /// the same speed they patrol the Dock at read as two cats who happened to end up in
+    /// the same place. Two and a half times is the point where the walk cycle still reads
+    /// as legs rather than a blur at 12 fps, and it holds the approach to a couple of
+    /// seconds on a wide Dock instead of most of `approachCeiling`.
+    ///
+    /// A multiple of the pet's own speed rather than a fixed pt/s, so a user who has slowed
+    /// their cats down in Settings gets a slow run rather than the same dash everybody else
+    /// gets, and one who has sped them up is not overtaken by the kiss.
+    public static let approachSpeedMultiplier: CGFloat = 2.5
+
     /// Long enough to read three words and see who said them.
     public static let announceDuration: TimeInterval = 1.5
 

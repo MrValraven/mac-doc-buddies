@@ -1203,7 +1203,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             // crossing the Dock to reach a particular icon must not do.
             let napDriving = advanceNapTrip(for: pet, by: dt, on: strip)
             pet.advanceAnimation(by: dt, on: strip, spriteSet: sprites(for: pet),
-                                 moves: !isSteered(pet) && !isSteeredByScene(pet) && !napDriving)
+                                 moves: !isSteered(pet) && !isSteeredByScene(pet) && !napDriving,
+                                 spritePace: spritePace(for: pet))
         }
     }
 
@@ -1325,6 +1326,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         return pet === kiss.left || pet === kiss.right
     }
 
+    /// [M14] How fast this pet's sheet plays, as a multiple of its own frame rate.
+    ///
+    /// The one place anything but 1: a cat crossing the Dock at two and a half times its
+    /// walking speed with the walk cycle still playing at twelve frames a second is a cat
+    /// skating, not running. There is no run sheet to swap to (SPEC §5's art is walk, idle,
+    /// sit and sleep), so the legs are made to keep up with the ground instead, which is
+    /// what the extra frame rate buys.
+    func spritePace(for pet: Pet) -> Double {
+        isSteered(pet) ? Double(KissRoutine.approachSpeedMultiplier) : 1
+    }
+
     /// Start a kiss between two cats: they drop what they are saying and set off.
     ///
     /// `reason` is for the log and nothing else — SPEC §9, on a six-second sequence nobody
@@ -1379,10 +1391,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             // Both walk to the point between them. Recomputed every frame rather than
             // fixed at the start: the strip can move or shrink under them mid-approach, and
             // a target from four seconds ago can be somewhere neither cat can stand.
+            // [M14] And they run it rather than walk it: the pair has somewhere to be.
+            // The multiplier is applied per call rather than written into `walker.speed`,
+            // so a kiss abandoned mid-approach cannot leave a cat sprinting for the rest of
+            // the session.
             let midpoint = (left.walker.distance + right.walker.distance) / 2
             for pet in [left, right] {
                 pet.walker.walk(toward: midpoint, by: dt,
-                                maxDistance: Geometry.maximumDistance(for: pet.size, on: strip))
+                                maxDistance: Geometry.maximumDistance(for: pet.size, on: strip),
+                                speedMultiplier: KissRoutine.approachSpeedMultiplier)
             }
             // Facing is set from the pair rather than from each walker's direction: the two
             // are the same thing during the approach, except on the frames where a cat has
