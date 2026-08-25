@@ -25,7 +25,7 @@ struct LaunchOptions {
     /// dedication (see `PetInteraction.isSelfTest`).
     var isSelfTest: Bool {
         renderTest || settingsTest || menuTest || dockBounds || interactionTest || dedicationTest
-            || kissTest
+            || kissTest || sceneTest
     }
 
     /// With --settings-test, also render the window to this PNG path. Rendered offscreen
@@ -44,6 +44,12 @@ struct LaunchOptions {
     /// takes six seconds of screen and produces no file, so this is the only way anybody
     /// who cannot watch it can tell whether it works.
     let kissTest: Bool
+    /// [M13] Run the birthday scene now, whatever the date, and exit. The scene is ten
+    /// seconds of screen that happens once a year, so without this the only way to check it
+    /// is to wait for the day it is meant to be a surprise on, and by then it is too late
+    /// to fix. It never writes the real once-a-day stamp, so rehearsing it does not silence
+    /// the real one.
+    let sceneTest: Bool
 
     init(arguments: [String]) {
         self.verbose = arguments.contains("--verbose") || arguments.contains("-v")
@@ -56,6 +62,7 @@ struct LaunchOptions {
         self.interactionTest = arguments.contains("--interaction-test")
         self.dedicationTest = arguments.contains("--dedication-test")
         self.kissTest = arguments.contains("--kiss-test")
+        self.sceneTest = arguments.contains("--scene-test")
     }
 }
 
@@ -157,11 +164,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// [M11] One coordinator for the pair, seeded like everything else in the app that
     /// rolls dice (SPEC §9). It owns the decision — have they met, is the cooldown up,
     /// which pair of lines — and this file only applies it.
-    private var meetings = MeetingCoordinator(seed: UInt64.random(in: UInt64.min...UInt64.max))
+    /// [M13] Internal rather than private: `SceneDirector` stamps the same cooldown when
+    /// the scene ends, for the reason the kiss stamps it. A Swift extension in another file
+    /// cannot see a private member, and two coordinators would be two sets of state that
+    /// disagree about when the cats last spent time together.
+    var meetings = MeetingCoordinator(seed: UInt64.random(in: UInt64.min...UInt64.max))
+
+    /// [M13] Which feature owns each cat. See `PetOccupancy`: through M12 one guard
+    /// (`kiss == nil`) was the whole of this, and M13 adds four more claimants that can
+    /// want the same cat in the same tick.
+    var occupancy = PetOccupancy(petCount: 0)
+
+    /// [M13] The birthday scene in progress, or `nil`, which is every day but one.
+    var scene: SceneInProgress?
 
     /// [M12] The kiss in progress, or `nil` — which is nearly always. One at a time: the
     /// cast is two cats, and both of them are in it.
-    private var kiss: KissInProgress?
+    var kiss: KissInProgress?
 
     /// The routine, the pair it belongs to, and the hearts while they are up.
     ///
@@ -169,7 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     /// standing — not from their position in `pets`. They swap places during the approach
     /// often enough that reading it per frame would have the line come out of whichever cat
     /// happened to be leading.
-    private struct KissInProgress {
+    struct KissInProgress {
         var routine = KissRoutine()
         let left: Pet
         let right: Pet
@@ -326,6 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         if options.interactionTest { runInteractionTest() }
         if options.dedicationTest { runDedicationTest() }
         if options.kissTest { runKissTest() }
+        if options.sceneTest { runSceneTest() }
 
         // [M11] Skipped under a self-test: a test run must not put a window on screen and
         // wait for a human. Skipped when already granted, which is the normal case for me
@@ -448,6 +468,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
                   + "\(pet.profile.palette.displayName) coat, \(sliced) walk frames")
             return pet
         }
+        // [M13] One slot per cat, every time the cast is built. Done here rather than only
+        // in `rebuildPets` so the launch path gets it too: an occupancy sized for no cats
+        // refuses every claim, which would look exactly like four features quietly not
+        // working.
+        occupancy.reset(petCount: pets.count)
     }
 
     /// [M11] Change the *number* of cats on the Dock.
@@ -487,8 +512,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // [M12] Before the cats go: the hearts belong to the pair, not to either window, so
         // nothing else on this path would take them down.
         endKiss()
+        // [M13] And the scene, for the same reason: its confetti and hearts belong to the
+        // pair rather than to either window, so nothing else on this path takes them down.
+        endScene()
         for pet in pets { pet.teardown() }
         pets = []
+        // [M13] Every claim named an index into the array that is about to be replaced. At
+        // best that is a different cat; at worst one that is no longer on screen.
+        occupancy.reset(petCount: cast.count)
         spriteSets = sets
 
         print("[settings] rebuilding the cast — \(cast.count) cat(s)")
@@ -1018,6 +1049,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             meetings.advance(by: dt)
             considerMeeting()
 
+            // [M13] After the meeting, not before: on the one morning both could fire, the
+            // scene is the bigger event and the meeting has already spent its cooldown by
+            // the time we get here, so the pair cannot start chatting on top of it.
+            considerBirthdayScene()
+
         case .absent(let reason):
             currentLocation = nil
             for pet in pets where pet.window.isVisible { pet.window.orderOut(nil) }
@@ -1048,12 +1084,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // pair sitting there with a bubble up, permanently. The other reasons still win;
         // `updateAnimationState` lets the kiss go rather than letting it hang.
         if kiss != nil { return nil }
+        // [M13] And a scene, for exactly the same reason: the pair sits through the
+        // announcement, the confetti and the wish, so the frame they sit down on is the one
+        // the timer would otherwise stop at, taking the clock that ends the scene with it.
+        if scene != nil { return nil }
         if pets.allSatisfy({ $0.isStationary(spriteSet: sprites(for: $0)) }) { return .stationary }
         if ProcessInfo.processInfo.isLowPowerModeEnabled { return .lowPowerMode }
         return nil
     }
 
-    private func updateAnimationState() {
+    func updateAnimationState() {
         if let reason = suspensionReason() {
             // [M12] The timer is about to stop, and the kiss is driven by it. Letting it go
             // here is what keeps "the Dock went away mid-kiss" from meaning "two cats sit
@@ -1061,6 +1101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             if kiss != nil {
                 print("[kiss] abandoned — the animation stopped (\(reason.rawValue))")
                 releaseKiss()
+            }
+            if scene != nil {
+                print("[scene] abandoned: the animation stopped (\(reason.rawValue))")
+                releaseScene()
             }
             suspendAnimation()
             logAnimation("suspended — \(reason.rawValue)")
@@ -1095,12 +1139,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // [M12] Before the pets move: the kiss decides where two of them are going, and
         // the phase it lands on this frame is what `moves:` below is asked about.
         advanceKiss(by: dt, on: strip)
+        advanceScene(by: dt, on: strip)
 
         // [M11] One timer, every pet. SPEC §6: a second cat must not double the app's
         // wakeups — only the work done inside a wakeup.
         for pet in pets {
             pet.advanceAnimation(by: dt, on: strip, spriteSet: sprites(for: pet),
-                                 moves: !isSteered(pet))
+                                 moves: !isSteered(pet) && !isSteeredByScene(pet))
         }
     }
 
@@ -1120,6 +1165,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
         // without this, the overlap they are standing in during the kiss would be read as
         // a fresh meeting and put a conversation on top of it.
         guard kiss == nil else { return }
+        // [M13] Same reasoning for the scene: it holds both cats for its whole length,
+        // including the walk away, and the overlap they stand in would otherwise read as a
+        // fresh meeting and put a conversation on top of her birthday.
+        guard scene == nil else { return }
         let a = pets[0], b = pets[1]
 
         // Neither cat interrupts itself mid-sentence, and a cat being clicked is having a
@@ -1413,7 +1462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     // MARK: - Logging
 
     /// State changes are always logged; they are rare and they explain everything else.
-    private func logLocation(_ description: String) {
+    func logLocation(_ description: String) {
         guard description != lastLocationDescription else { return }
         lastLocationDescription = description
         print("[state] \(description)")
@@ -1767,7 +1816,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
     }
 
     /// [M12] Three conditions, all of which can change between one click and the next.
-    var interactionCanKiss: Bool { config.kisses && pets.count == 2 && kiss == nil }
+    var interactionCanKiss: Bool {
+        config.kisses && pets.count == 2 && kiss == nil && scene == nil
+    }
 
     func interactionRequestKiss() {
         // Re-checked rather than trusted: the menu was built when the click landed, and a

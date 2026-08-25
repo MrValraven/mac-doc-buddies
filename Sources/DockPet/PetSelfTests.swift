@@ -908,4 +908,153 @@ extension AppDelegate {
         print("all \(checks) checks passed")
         exit(0)
     }
+
+    /// [M13] Run the birthday scene now and check every phase of it.
+    ///
+    /// SPEC §9, in its sharpest form. The scene is ten seconds of screen on one morning a
+    /// year, so the alternative to this is finding out whether it works on the day it was
+    /// meant to be a surprise, with no time left to fix it. `--scene-test` lifts the date
+    /// and the once-a-day gate, and writes neither stamp, so rehearsing it in August cannot
+    /// silence the real one.
+    func runSceneTest() -> Never {
+        var failures = 0
+        var checks = 0
+        func check(_ passed: Bool, _ what: String, _ detail: @autoclosure () -> String = "") {
+            checks += 1
+            if passed { print("  ok    \(what)") }
+            else { failures += 1; print("  FAIL  \(what)\(detail().isEmpty ? "" : ": \(detail())")") }
+        }
+        func settle(_ seconds: TimeInterval) {
+            RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        }
+        func waitFor(_ phase: BirthdayScene.Phase?, within limit: TimeInterval) -> Bool {
+            let deadline = Date().addingTimeInterval(limit)
+            while Date() < deadline {
+                if scenePhase == phase { return true }
+                settle(0.05)
+            }
+            return scenePhase == phase
+        }
+
+        print("SceneTest")
+
+        let originalConfig = config
+        let originalSceneDay = StateStore.lastSceneDay
+        let originalGreetedDay = StateStore.lastGreetedDay
+
+        var testConfig = originalConfig
+        if testConfig.pets.count < 2 {
+            let first = testConfig.pets.first ?? PetProfile(name: nil, color: testConfig.color,
+                                                            userName: testConfig.userName)
+            let other = CatPalette.all.first { $0.id != first.color } ?? .default
+            testConfig.pets = [first, PetProfile(name: nil, color: other.id, userName: nil)]
+        }
+        applyConfig(testConfig, persist: false)
+        settle(0.6)
+
+        check(pets.count == 2, "the scene has two cats to work with", "got \(pets.count)")
+        guard pets.count == 2 else {
+            print("\n\(failures + 1) of \(checks + 1) checks FAILED")
+            applyConfig(originalConfig, persist: false)
+            exit(1)
+        }
+        guard currentLocation != nil else {
+            print("  SKIP  the Dock is not located (grant Accessibility, or unhide the Dock):"
+                  + " there is no strip to hold a scene on")
+            applyConfig(originalConfig, persist: false)
+            exit(1)
+        }
+
+        // --- it starts on its own ---------------------------------------------------
+        let before = pets.map(\.walker.distance)
+        considerBirthdayScene()
+        check(scenePhase == .approach, "the scene starts without anything being clicked",
+              "phase \(scenePhase.map { $0.rawValue } ?? "none")")
+        guard let running = scene else {
+            print("\n\(failures + 1) of \(checks + 1) checks FAILED")
+            applyConfig(originalConfig, persist: false)
+            exit(1)
+        }
+        check(!interactionCanKiss, "and a kiss cannot be asked for on top of it")
+
+        settle(0.8)
+        let closing = zip(before, pets.map(\.walker.distance)).map { abs($0 - $1) }
+        check(closing.contains { $0 > 0 }, "both cats set off toward each other",
+              "moved \(closing.map { Self.f($0) })")
+
+        // --- they gather -------------------------------------------------------------
+        check(waitFor(.gather, within: BirthdayScene.approachCeiling + 1),
+              "they reach each other and settle",
+              "phase \(scenePhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { $0.behavior.state == .sit }, "both cats sit down",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+        check(MeetingCoordinator.haveMet(pets[0].window.frame, pets[1].window.frame),
+              "and they are standing against each other")
+        check(pets.allSatisfy { !$0.interaction.isTalking },
+              "nobody speaks before they have arrived")
+
+        // --- the announcement --------------------------------------------------------
+        check(waitFor(.announce, within: BirthdayScene.gatherDuration + 1),
+              "then one of them gives the birthday line",
+              "phase \(scenePhase.map { $0.rawValue } ?? "none")")
+        check(running.left.interaction.isTalking, "the left cat is the one that says it")
+        check(running.left.interaction.lastReply == running.announcement,
+              "and it says what the scene said it would",
+              "got \(running.left.interaction.lastReply ?? "nothing")")
+
+        // --- the celebration ---------------------------------------------------------
+        check(waitFor(.celebrate, within: BirthdayScene.announceDuration + 1),
+              "then the confetti falls",
+              "phase \(scenePhase.map { $0.rawValue } ?? "none")")
+        check(sceneConfettiIsUp, "the confetti is on screen")
+        check(sceneHeartsAreUp, "and the hearts are up with it rather than after it")
+        check(pets.allSatisfy { !$0.interaction.isTalking },
+              "and the line has come down, so nothing overlaps them")
+
+        // --- the wish ----------------------------------------------------------------
+        check(waitFor(.wish, within: BirthdayScene.celebrateDuration + 1),
+              "then the other one answers",
+              "phase \(scenePhase.map { $0.rawValue } ?? "none")")
+        check(!sceneConfettiIsUp, "the confetti is down before the bubble goes up")
+        check(!sceneHeartsAreUp, "and so are the hearts")
+        check(running.right.interaction.isTalking, "the right cat is the one that answers")
+        check(running.right.interaction.lastReply == running.wish,
+              "and it says the wish the scene chose",
+              "got \(running.right.interaction.lastReply ?? "nothing")")
+
+        // --- the parting -------------------------------------------------------------
+        check(waitFor(.part, within: BirthdayScene.wishDuration + 1), "then they part",
+              "phase \(scenePhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { !$0.interaction.isTalking },
+              "the last bubble comes down with it")
+        check(pets.allSatisfy { $0.behavior.state == .walk }, "and both cats walk away",
+              "got \(pets.map { $0.behavior.state.rawValue })")
+
+        check(waitFor(nil, within: BirthdayScene.partDuration + 1),
+              "the scene finishes and hands the pair back to its own behaviour",
+              "phase \(scenePhase.map { $0.rawValue } ?? "none")")
+        check(!sceneConfettiIsUp && !sceneHeartsAreUp,
+              "with nothing of it left on screen")
+
+        settle(0.5)
+        check(!MeetingCoordinator.haveMet(pets[0].window.frame, pets[1].window.frame),
+              "the two are apart again, so the next tick is not read as a fresh meeting")
+
+        // --- it does not spend the real thing ----------------------------------------
+        check(StateStore.lastSceneDay == originalSceneDay,
+              "the rehearsal did not stamp the real once-a-day gate, so her birthday still"
+                + " gets its scene",
+              "was \(originalSceneDay ?? "nil"), now \(StateStore.lastSceneDay ?? "nil")")
+        check(StateStore.lastGreetedDay == originalGreetedDay,
+              "and did not spend the dedication either",
+              "was \(originalGreetedDay ?? "nil"), now \(StateStore.lastGreetedDay ?? "nil")")
+
+        applyConfig(originalConfig, persist: false)
+        check(config == originalConfig, "the test restored your original settings")
+
+        print("")
+        if failures > 0 { print("\(failures) of \(checks) checks FAILED"); exit(1) }
+        print("all \(checks) checks passed")
+        exit(0)
+    }
 }

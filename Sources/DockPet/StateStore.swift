@@ -27,6 +27,12 @@ enum StateStore {
 
     private struct State: Codable {
         var lastGreetedDay: String?
+        /// [M13] The day the birthday scene last ran, so it happens once and not on every
+        /// poll of the morning. Separate from `lastGreetedDay` because they are different
+        /// events on the one day both fire: the scene runs unprompted, the dedication is
+        /// spent by a click, and sharing a stamp would let whichever came first silence
+        /// the other for the rest of the day.
+        var lastSceneDay: String?
     }
 
     private static func read() -> State {
@@ -46,10 +52,30 @@ enum StateStore {
         set {
             var state = read()
             state.lastGreetedDay = newValue
-            guard let data = try? JSONEncoder().encode(state) else { return }
-            try? FileManager.default.createDirectory(at: directory,
-                                                     withIntermediateDirectories: true)
-            try? data.write(to: url)
+            write(state)
         }
+    }
+
+    /// [M13] The `Occasion.dayStamp` of the day the birthday scene last ran, or `nil`.
+    ///
+    /// Stamped the moment the scene begins rather than when it finishes. A scene that is
+    /// abandoned half way (a Dock that moved, a cast rebuilt underneath it) has still had
+    /// its turn, and retrying it every 500 ms for the rest of her birthday would be far
+    /// worse than missing it once.
+    static var lastSceneDay: String? {
+        get { read().lastSceneDay }
+        set {
+            var state = read()
+            state.lastSceneDay = newValue
+            write(state)
+        }
+    }
+
+    /// Every failure is silent by design, for the reason given on `lastGreetedDay`.
+    private static func write(_ state: State) {
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        try? FileManager.default.createDirectory(at: directory,
+                                                 withIntermediateDirectories: true)
+        try? data.write(to: url)
     }
 }
