@@ -61,8 +61,8 @@ public struct CatPalette: Equatable {
 
     // MARK: - The presets
 
-    /// Orange tabby: the coat the sheet is actually drawn in, and therefore both the
-    /// default and the palette every other coat is mapped *from*.
+    /// Orange tabby: the coat the sheet is actually drawn in, and therefore the palette
+    /// every other coat is mapped *from*. Not the default — see `olive`.
     public static let orange = CatPalette(
         id: "orange", displayName: "Orange tabby",
         coat: RGB(hex: 0xE8954A), stripe: RGB(hex: 0xC46B26), belly: RGB(hex: 0xF7DCB4),
@@ -90,7 +90,7 @@ public struct CatPalette: Equatable {
         coat: RGB(hex: 0x33303A), stripe: RGB(hex: 0x26232B), belly: RGB(hex: 0xFFFFFF),
         farLimb: RGB(hex: 0x27242D), pink: RGB(hex: 0xE8A0AE), eye: RGB(hex: 0xD9A441))
 
-    /// The loosest fit of the six: real points cover the face, ears, legs and tail, while
+    /// The loosest fit of the seven: real points cover the face, ears, legs and tail, while
     /// the sheet only has a stripe region to darken. It reads as a Siamese at 32 px, but
     /// it is an approximation rather than a faithful colourpoint.
     public static let siamese = CatPalette(
@@ -98,10 +98,37 @@ public struct CatPalette: Equatable {
         coat: RGB(hex: 0xE9DCC2), stripe: RGB(hex: 0x8A6A4E), belly: RGB(hex: 0xFBF3E4),
         farLimb: RGB(hex: 0xC0A886), pink: RGB(hex: 0xE8A0AE), eye: RGB(hex: 0x5B8FC7))
 
-    /// Popup order. Fixed rather than sorted, so the list never reshuffles.
-    public static let all: [CatPalette] = [orange, grey, black, white, tuxedo, siamese]
+    /// White with an olive coat — a bicolour cat, roughly 60% olive to 40% white.
+    ///
+    /// The white is not a palette trick: it comes from the sheet, whose `belly` region was
+    /// grown to about 40% of the body pixels precisely so this coat could exist (see
+    /// `whiteSocks` in makesprite.swift). A palette can recolour regions but never resize
+    /// them, so before that change the only reachable splits were ~85% coloured or ~85%
+    /// white, with nothing usable in between.
+    ///
+    /// `farLimb` stays olive rather than white so the far legs read as behind the near
+    /// ones; the sheet paints them in their own ink for exactly that reason.
+    ///
+    /// The eyes are an autumn gold rather than the green the other tabbies use. Green eyes
+    /// on a green-brown coat are only about 15 points of luma apart, and an eye is two
+    /// pixels sitting *inside* the coat colour — at that size the contrast is the only
+    /// thing making it an eye rather than a smudge. Gold clears the coat by roughly 50.
+    public static let olive = CatPalette(
+        id: "olive", displayName: "Olive & white",
+        coat: RGB(hex: 0x9A9068), stripe: RGB(hex: 0x6E6748), belly: RGB(hex: 0xFFFFFF),
+        farLimb: RGB(hex: 0x7C7553), pink: RGB(hex: 0xE8A0AE), eye: RGB(hex: 0xF2BC4B))
 
-    public static let `default` = orange
+    /// Popup order. Fixed rather than sorted, so the list never reshuffles.
+    public static let all: [CatPalette] = [olive, orange, grey, black, white, tuxedo, siamese]
+
+    /// The coat a fresh config asks for, and the first entry in the popup.
+    ///
+    /// Deliberately *not* `base`. Every other coat is a recolour of the orange the sheet is
+    /// drawn in; the default is simply the one chosen for a new install, and it pays for a
+    /// recolour at load like any other. Code that wants "the colours the art is actually in"
+    /// wants `base` — using `default` there silently breaks the moment these two differ,
+    /// which is exactly what happened when olive took over as the default.
+    public static let `default` = olive
 
     /// The palette the shipped art is drawn in — what every swap maps away from.
     public static let base = orange

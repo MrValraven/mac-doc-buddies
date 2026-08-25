@@ -121,17 +121,19 @@ enum ConfigTests {
 
         section("config: coat colour")
 
-        check(PetConfig.default.color == "orange",
-              "the coat defaults to orange — the colour the art is drawn in",
+        check(PetConfig.default.color == "olive",
+              "the coat defaults to olive & white",
               detail: "got \(PetConfig.default.color)")
-        check(PetConfig.default.palette == CatPalette.orange,
-              "and resolves to the orange palette")
+        check(PetConfig.default.palette == CatPalette.olive,
+              "and resolves to the olive palette")
+        check(PetConfig.default.color == CatPalette.default.id,
+              "the config default and the palette default cannot drift apart")
 
         check(decode(#"{"color":"grey"}"#)?.color == "grey", "a coat can be chosen in the file")
         check(decode(#"{"color":"grey"}"#)?.palette == CatPalette.grey,
               "and resolves to that palette")
-        check(decode(#"{"speed":40}"#)?.color == "orange",
-              "a config that omits the coat still gets orange")
+        check(decode(#"{"speed":40}"#)?.color == "olive",
+              "a config that omits the coat still gets the default")
 
         // Every id offered in the popup must survive a write/read cycle, or picking a coat
         // would not stick across a relaunch.
@@ -147,11 +149,11 @@ enum ConfigTests {
         }
 
         let badColor = PetConfig(color: "chartreuse").validated()
-        check(badColor.config.color == "orange",
-              "an unknown coat falls back to orange rather than to an invisible cat",
+        check(badColor.config.color == PetConfig.default.color,
+              "an unknown coat falls back to the default rather than to an invisible cat",
               detail: "got \(badColor.config.color)")
         check(badColor.corrections.contains { $0.field == "color" }, "and says so in the log")
-        check(badColor.config.palette == CatPalette.orange, "and resolves to a real palette")
+        check(badColor.config.palette == CatPalette.default, "and resolves to a real palette")
 
         // config.json is hand-edited, so accept what a person would plausibly type and
         // normalise it, rather than treating it as a typo.

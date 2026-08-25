@@ -168,6 +168,23 @@ func tint(_ g: inout Grid, _ ink: Ink, _ shape: (inout Grid) -> Void) {
     }
 }
 
+// MARK: - Bicolour white
+
+/// Turn every coat pixel below `y` white — the socks and underside of a bicolour cat.
+///
+/// This lives in the art rather than in `CatPalette` because a palette can only recolour
+/// the regions the sheet already has, never resize them. The sheet spent 85% of its body
+/// pixels on `coat` and 13% on `belly`, so no choice of colours could produce a cat that
+/// reads as substantially white; the only reachable splits were ~85/13 or ~14/84. Growing
+/// the belly region here is what makes a roughly 60/40 coat-to-white cat possible at all.
+///
+/// Far-side limbs are `.farLimb`, not `.coat`, so `tint` leaves them coloured. That is
+/// deliberate: white socks on the near legs and coloured ones behind keeps the depth cue
+/// that stops the four legs merging into one pale block.
+func whiteSocks(_ g: inout Grid, from y: Int) {
+    tint(&g, .belly) { $0.fillRect(x0: 0, y0: y, x1: frameSize - 1, y1: frameSize - 1, .belly) }
+}
+
 // MARK: - Walk cycle
 
 /// Where a paw sits at a given point in the cycle.
@@ -247,10 +264,13 @@ func makeFrame(_ index: Int) -> Grid {
     drawLeg(&g, hip: (18.5, bodyCY + 2.5), phase: phase + 0.25, reach: 4.0, ink: .coat)
 
     // --- markings: painted only over existing coat, so they never spill past the outline ---
-    // Cream underside, chest and muzzle.
-    tint(&g, .belly) { $0.fillEllipse(cx: 13.0, cy: bodyCY + 3.4, rx: 5.4, ry: 1.6, .belly) }
-    tint(&g, .belly) { $0.fillEllipse(cx: 19.2, cy: bodyCY - 0.4, rx: 1.8, ry: 2.2, .belly) }
-    tint(&g, .belly) { $0.fillEllipse(cx: 25.6, cy: headCY + 1.8, rx: 2.1, ry: 1.4, .belly) }
+    // The white of a bicolour cat: underside, chest, muzzle, socks and tail tip. See the
+    // note above `whiteSocks` for why this is art and not a palette entry.
+    tint(&g, .belly) { $0.fillEllipse(cx: 13.0, cy: bodyCY + 3.3, rx: 7.0, ry: 2.7, .belly) }
+    tint(&g, .belly) { $0.fillEllipse(cx: 19.2, cy: bodyCY - 0.2, rx: 2.6, ry: 3.2, .belly) }
+    tint(&g, .belly) { $0.fillEllipse(cx: 25.6, cy: headCY + 1.8, rx: 2.4, ry: 1.6, .belly) }
+    whiteSocks(&g, from: 26)
+    tint(&g, .belly) { $0.fillEllipse(cx: tip.0, cy: tip.1, rx: 1.7, ry: 1.7, .belly) }
 
     // Three thin tabby bars, spaced so they stay separate at this size.
     for bar in 0..<3 {
@@ -355,8 +375,10 @@ func makeIdlePose() -> Grid {
     drawStandingLeg(&g, x: 13.4, top: 25.0, ink: .coat)
     drawStandingLeg(&g, x: 18.6, top: 25.0, ink: .coat)
 
-    // Cream front, from chin to between the paws.
-    tint(&g, .belly) { $0.fillEllipse(cx: 16.0, cy: 23.0, rx: 2.7, ry: 5.2, .belly) }
+    // White front, from chin to between the paws, plus socks and tail tip.
+    tint(&g, .belly) { $0.fillEllipse(cx: 16.0, cy: 22.8, rx: 3.3, ry: 6.2, .belly) }
+    whiteSocks(&g, from: 25)
+    tint(&g, .belly) { $0.fillEllipse(cx: 22.6, cy: 15.2, rx: 1.7, ry: 1.7, .belly) }
 
     // Tabby banding down the flanks, clear of the cream front.
     for side in [-1.0, 1.0] {
@@ -407,14 +429,15 @@ func makeSitPose() -> Grid {
 
     // Cream front. It stops a row short of the paws so a band of coat separates the two;
     // run them together and the whole chest reads as one cream slab.
-    tint(&g, .belly) { $0.fillEllipse(cx: 16.0, cy: 19.8, rx: 2.8, ry: 4.8, .belly) }
+    tint(&g, .belly) { $0.fillEllipse(cx: 16.0, cy: 19.8, rx: 3.7, ry: 5.6, .belly) }
 
     // The paws: colour only, no stamp. Tinting inside the existing silhouette adds no
     // outline of its own, which is the whole point — two pixels of coat between them is
     // all the separation a pair of paws needs at 32x32.
     for cx in [13.3, 18.7] {
-        tint(&g, .belly) { $0.fillEllipse(cx: cx, cy: 27.0, rx: 2.1, ry: 1.4, .belly) }
+        tint(&g, .belly) { $0.fillEllipse(cx: cx, cy: 27.0, rx: 2.6, ry: 1.9, .belly) }
     }
+    tint(&g, .belly) { $0.fillEllipse(cx: 12.4, cy: 29.4, rx: 1.7, ry: 1.5, .belly) }
 
     for side in [-1.0, 1.0] {
         tint(&g, .stripe) {
@@ -459,7 +482,8 @@ func makeSleepPose() -> Grid {
         }
     }
 
-    tint(&g, .belly) { $0.fillEllipse(cx: 18.0, cy: 29.4, rx: 6.4, ry: 1.8, .belly) }
+    tint(&g, .belly) { $0.fillEllipse(cx: 18.0, cy: 28.4, rx: 7.9, ry: 3.5, .belly) }
+    tint(&g, .belly) { $0.fillEllipse(cx: 13.0, cy: 28.6, rx: 1.8, ry: 1.6, .belly) }
     for bar in 0..<3 {
         let x = 14.0 + Double(bar) * 3.4
         tint(&g, .stripe) { $0.stroke(from: (x, 19.6), to: (x - 0.7, 21.4), width: 1.1, .stripe) }

@@ -118,7 +118,7 @@ enum RenderTest {
     private static func checkRecolouring() {
         print("\ncoat recolouring")
 
-        guard let base = try? SpriteLoader.load(palette: .default),
+        guard let base = try? SpriteLoader.load(palette: .base),
               let baseBytes = SpriteRecolor.rgbaBytes(of: base.image) else {
             check(false, "the base sheet could be decoded to RGBA"); return
         }
@@ -150,9 +150,33 @@ enum RenderTest {
               "no pixel is erased or added — only recoloured",
               "\(opaqueCount(baseBytes)) -> \(opaqueCount(greyBytes))")
 
-        guard let identityBytes = SpriteRecolor.rgbaBytes(of: SpriteRecolor.apply(.default, to: base.image))
+        guard let identityBytes = SpriteRecolor.rgbaBytes(of: SpriteRecolor.apply(.base, to: base.image))
         else { check(false, "the identity recolour could be decoded"); return }
-        check(identityBytes == baseBytes, "choosing orange leaves the sheet byte-for-byte unchanged")
+        check(identityBytes == baseBytes, "choosing the base coat leaves the sheet byte-for-byte unchanged")
+
+        // --- the bicolour split the art is responsible for ---
+        //
+        // The `olive` coat is specified as roughly 60% coloured to 40% white, and that
+        // ratio lives in makesprite.swift's belly region, not in CatPalette. A palette can
+        // recolour a region but never resize one, so if someone shrinks the belly back
+        // towards its original 13% there is nothing in the colour tests that would notice
+        // — the cat would just quietly stop being bicolour. This is the check that notices.
+        //
+        // Counted over body pixels only: the outline is not a coat colour, and including
+        // it would make the split depend on how much perimeter a pose happens to have.
+        let bellyPixels = count(CatPalette.base.belly, in: baseBytes)
+        let stripePixels = count(CatPalette.base.stripe, in: baseBytes)
+        let farLimbPixels = count(CatPalette.base.farLimb, in: baseBytes)
+        let coloured = baseCoatPixels + stripePixels + farLimbPixels
+        let body = coloured + bellyPixels
+        if body > 0 {
+            let whiteShare = Double(bellyPixels) / Double(body) * 100
+            check((34.0...46.0).contains(whiteShare),
+                  "the sheet is a bicolour cat — white is 34-46% of the body",
+                  String(format: "white is %.1f%% (%d of %d body px)", whiteShare, bellyPixels, body))
+        } else {
+            check(false, "the sheet has body pixels to measure")
+        }
 
         // Every coat must land somewhere visible, or the popup would offer a no-op.
         for palette in CatPalette.all where !palette.isIdentity {

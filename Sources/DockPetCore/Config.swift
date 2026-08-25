@@ -69,7 +69,7 @@ public struct PetConfig: Codable, Equatable {
     // [M9] There is no confinement setting. The pet is always confined to the Dock's
     // tiles; the only variable is whether Accessibility has been granted yet.
     public init(speed: Double = 30, scale: Int = 2, screen: String? = nil,
-                menuBarIcon: Bool = true, color: String = "orange",
+                menuBarIcon: Bool = true, color: String = CatPalette.default.id,
                 userName: String? = nil, launchAtLogin: Bool = true,
                 pets: [PetProfile] = [], birthday: String? = nil, dedication: String? = nil) {
         self.speed = speed

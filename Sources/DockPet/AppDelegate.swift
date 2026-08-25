@@ -626,8 +626,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             return found
         }
 
-        check(coatPixels(CatPalette.orange.coat) > 0,
-              "the pet starts out in the orange coat the art is drawn in")
+        check(coatPixels(CatPalette.olive.coat) > 0,
+              "the pet starts out in the olive coat, the default")
+        check(coatPixels(CatPalette.orange.coat) == 0,
+              "and not in the orange the sheet is drawn in — the default is a recolour "
+              + "like any other, so a fresh install must already have been repainted")
 
         window.simulate(color: "grey")
         check(config.color == "grey", "the coat popup updates the config", "got \(config.color)")

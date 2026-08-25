@@ -12,11 +12,11 @@ enum CatPaletteTests {
 
         section("cat palette: the catalogue")
 
-        check(CatPalette.all.count == 6, "six coats are offered",
+        check(CatPalette.all.count == 7, "seven coats are offered",
               detail: "got \(CatPalette.all.count)")
 
         let ids = CatPalette.all.map(\.id)
-        check(ids == ["orange", "grey", "black", "white", "tuxedo", "siamese"],
+        check(ids == ["olive", "orange", "grey", "black", "white", "tuxedo", "siamese"],
               "in a fixed order, so the popup never reshuffles between launches",
               detail: "got \(ids)")
         check(Set(ids).count == ids.count, "with no duplicate ids")
@@ -24,11 +24,19 @@ enum CatPaletteTests {
         check(CatPalette.all.allSatisfy { !$0.displayName.isEmpty },
               "every coat has a name to show in the popup")
 
-        check(CatPalette.default.id == "orange",
-              "orange tabby is the default — it is the coat the art is actually drawn in",
+        check(CatPalette.default.id == "olive",
+              "olive & white is the default coat",
               detail: "got \(CatPalette.default.id)")
         check(CatPalette.all.first == CatPalette.default,
               "and it is the first item in the popup")
+
+        // These were the same palette until olive became the default, and several checks
+        // quietly depended on that. Assert they are now distinct so the distinction cannot
+        // collapse again unnoticed: `base` is the art's own colours, `default` is a choice.
+        check(CatPalette.base.id == "orange",
+              "the base palette is still orange — it is what the sheet is drawn in")
+        check(CatPalette.default != CatPalette.base,
+              "the default is a recolour, not the art's own palette")
 
         section("cat palette: lookup")
 
@@ -46,7 +54,7 @@ enum CatPaletteTests {
         // silently match nothing and every coat would come out orange. This is the check
         // that catches that, so it asserts the literal bytes rather than deriving them.
         let base = CatPalette.base
-        check(base == CatPalette.default, "the base palette IS the orange preset")
+        check(base == CatPalette.orange, "the base palette IS the orange preset")
         eqRGB(base.coat,    (0xE8, 0x95, 0x4A), "base coat is makesprite's Ink.coat")
         eqRGB(base.stripe,  (0xC4, 0x6B, 0x26), "base stripe is makesprite's Ink.stripe")
         eqRGB(base.belly,   (0xF7, 0xDC, 0xB4), "base belly is makesprite's Ink.belly")
@@ -63,8 +71,10 @@ enum CatPaletteTests {
         for palette in CatPalette.all where palette.id != "orange" {
             check(!palette.isIdentity, "\(palette.id) changes something")
         }
-        check(CatPalette.default.isIdentity,
+        check(CatPalette.base.isIdentity,
               "orange is the identity palette, so choosing it costs no work")
+        check(!CatPalette.default.isIdentity,
+              "the default is not, so a fresh install does pay for one recolour at load")
 
         section("cat palette: recolouring pixels")
 
@@ -86,7 +96,7 @@ enum CatPaletteTests {
         }
 
         var identity = sample()
-        CatPalette.default.recolor(rgba: &identity)
+        CatPalette.base.recolor(rgba: &identity)
         check(identity == sample(), "the orange palette leaves every pixel untouched")
 
         let grey = CatPalette.named("grey")!
@@ -145,6 +155,40 @@ enum CatPaletteTests {
               "grey keeps the pink nose on purpose")
         check(CatPalette.named("black")!.eye != base.eye,
               "black gets its own eye colour")
+
+        section("cat palette: olive & white is a bicolour coat")
+
+        // Olive is the one preset whose look depends on the *sheet* as much as on these
+        // colours: makesprite.swift grows the belly region to ~40% of the body so this
+        // coat can be roughly 60% olive to 40% white. If someone shrinks that region back,
+        // RenderTest's coat-to-white ratio check is what fails; these only pin the colours.
+        let olive = CatPalette.named("olive")!
+        func luma(_ c: CatPalette.RGB) -> Double {
+            0.2126 * Double(c.red) + 0.7152 * Double(c.green) + 0.0722 * Double(c.blue)
+        }
+        check(olive.belly == CatPalette.RGB(255, 255, 255),
+              "the white really is white — it is 40% of the cat, so a cream here reads dirty")
+        check(olive.coat.green > olive.coat.blue && olive.coat.red > olive.coat.blue,
+              "the coat is a greenish brown rather than a neutral grey",
+              detail: "coat r=\(olive.coat.red) g=\(olive.coat.green) b=\(olive.coat.blue)")
+        check(luma(olive.belly) - luma(olive.coat) > 90,
+              "the coat is dark enough to separate from the white at a glance",
+              detail: String(format: "belly %.0f vs coat %.0f",
+                             luma(olive.belly), luma(olive.coat)))
+        check(luma(olive.coat) - luma(olive.stripe) > 25,
+              "and the tabby banding stays readable against the coat")
+        check(luma(olive.farLimb) < luma(olive.coat),
+              "the far legs are shaded, not white — that is the depth cue that keeps the "
+              + "four legs from merging into one pale block")
+        // An eye is two pixels surrounded by coat, so it lives or dies on contrast with
+        // the coat specifically — not on being a nice colour in isolation.
+        check(olive.eye.red > olive.eye.green && olive.eye.green > olive.eye.blue,
+              "the eyes are a warm gold rather than green",
+              detail: "eye r=\(olive.eye.red) g=\(olive.eye.green) b=\(olive.eye.blue)")
+        check(luma(olive.eye) - luma(olive.coat) > 40,
+              "and bright enough to read against the coat they sit in",
+              detail: String(format: "eye %.0f vs coat %.0f",
+                             luma(olive.eye), luma(olive.coat)))
     }
 
     private static func eqRGB(_ got: CatPalette.RGB, _ want: (UInt8, UInt8, UInt8),
