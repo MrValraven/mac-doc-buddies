@@ -65,7 +65,7 @@ enum KissTests {
             eq(walker.distance, 0, "which is distance zero")
         }
 
-        section("[M12] KissRoutine — the four phases")
+        section("[M12] KissRoutine — the six phases")
 
         /// Run the routine forward in animation-sized steps.
         func advance(_ routine: inout KissRoutine, seconds: TimeInterval, touching: Bool) {
@@ -99,13 +99,31 @@ enum KissTests {
         do {
             var routine = KissRoutine()
             routine.advance(by: 0.25, touching: true)
+            advance(&routine, seconds: KissRoutine.announceDuration, touching: true)
+            eq(routine.phase, .kiss, "the announcement is what the hearts follow")
+            eq(routine.timeInPhase, 0, "and they start from the top, not mid-phase")
+        }
+
+        do {
+            var routine = KissRoutine()
+            routine.advance(by: 0.25, touching: true)
             advance(&routine, seconds: KissRoutine.announceDuration - 0.5, touching: true)
             eq(routine.phase, .announce, "the line stays up for as long as it takes to read")
             advance(&routine, seconds: 0.75, touching: true)
             eq(routine.phase, .kiss, "and then they kiss")
 
-            advance(&routine, seconds: KissRoutine.kissDuration, touching: true)
-            eq(routine.phase, .part, "the hearts do not outstay the kiss")
+            advance(&routine, seconds: KissRoutine.kissDuration - 0.5, touching: true)
+            eq(routine.phase, .kiss, "the hearts get the whole of their own phase")
+            advance(&routine, seconds: 0.75, touching: true)
+            eq(routine.phase, .declare, "and once they have gone, one of them says it")
+
+            advance(&routine, seconds: 0.5, touching: true)
+            eq(routine.phase, .declare, "which stays up for as long as it takes to read")
+            advance(&routine, seconds: KissRoutine.declareDuration, touching: true)
+            eq(routine.phase, .reply, "and then the other one answers")
+
+            advance(&routine, seconds: 0.75, touching: true)
+            eq(routine.phase, .part, "the answer is the last thing said")
 
             advance(&routine, seconds: KissRoutine.partDuration, touching: false)
             eq(routine.phase, .done, "and the pair is handed back to its own behaviour")
@@ -137,6 +155,12 @@ enum KissTests {
                "and it spends a bounded second in that phase, not the ten minutes it was handed")
             routine.advance(by: 600, touching: true)
             eq(routine.phase, .kiss, "so the line is still on screen for a readable time")
+            routine.advance(by: 600, touching: true)
+            routine.advance(by: 600, touching: true)
+            eq(routine.phase, .declare, "the hearts are not skipped either")
+            routine.advance(by: 600, touching: true)
+            routine.advance(by: 600, touching: true)
+            eq(routine.phase, .reply, "and neither is the line that answers them")
         }
 
         do {
@@ -230,6 +254,18 @@ enum KissTests {
             check(!Phrasebook.kissLine.contains(Phrasebook.nameSlot),
                   "the kiss line names nobody — it is said to a cat standing right there")
             check(!Phrasebook.kissLine.isEmpty, "and there is a line to say")
+        }
+
+        do {
+            let love = Phrasebook.loveLine
+            check(!love.opener.contains(Phrasebook.nameSlot)
+                  && !love.reply.contains(Phrasebook.nameSlot),
+                  "neither half of what follows the hearts names anybody either")
+            check(!love.opener.isEmpty && !love.reply.isEmpty, "and both halves have words")
+            check(love.opener != love.reply,
+                  "the answer is an answer, not the same line said twice")
+            check(love.opener != Phrasebook.kissLine,
+                  "and it is not the announcement said a second time")
         }
 
         do {

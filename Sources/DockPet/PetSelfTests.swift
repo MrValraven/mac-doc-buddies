@@ -491,6 +491,40 @@ extension AppDelegate {
                   "both got \(first ?? "nil")")
         }
 
+        // --- no configured name at all: the macOS account answers --------------------
+        //
+        // The rule this guards is that nobody's name is baked into the app. A config with
+        // no `userName` — which is what a fresh install has, and what this one ships with
+        // — must greet whoever is logged into the Mac, not a name left in a file. Checked
+        // against `NSFullUserName()` rather than a literal, because the whole point is
+        // that the answer comes from the account rather than from anything written here.
+        var anonymous = config
+        anonymous.userName = nil
+        for index in anonymous.pets.indices { anonymous.pets[index].userName = nil }
+        applyConfig(anonymous, persist: false)
+
+        let account = NSFullUserName().split(separator: " ").first.map(String.init)
+        check(effectiveUserName == account,
+              "with no name configured, the pet greets the macOS account's first name",
+              "got \(effectiveUserName ?? "nobody"), account is \(account ?? "nameless")")
+        check(pets.allSatisfy { interactionUserName(for: $0.interaction) == account },
+              "and every cat does, not just the first",
+              "got \(pets.map { interactionUserName(for: $0.interaction) ?? "nobody" })")
+
+        if let account {
+            var sawTheAccount = false
+            for _ in 0..<12 {
+                primary.interaction.dismissBubble()
+                primary.interaction.say(.hello)
+                if primary.interaction.lastReply?.contains(account) == true {
+                    sawTheAccount = true; break
+                }
+            }
+            check(sawTheAccount, "and it is the name that reaches the bubble",
+                  "last was \"\(primary.interaction.lastReply ?? "")\"")
+            primary.interaction.dismissBubble()
+        }
+
         applyConfig(originalConfig, persist: false)
         check(config == originalConfig, "the test restored your original settings")
         for pet in pets { pet.interaction.dismissBubble() }
@@ -817,10 +851,34 @@ extension AppDelegate {
         check(pets.allSatisfy { !$0.interaction.isTalking },
               "and the line has come down, so nothing overlaps the hearts")
 
-        // --- parting --------------------------------------------------------------------
-        check(waitFor(.part, within: KissRoutine.kissDuration + 1), "the kiss ends",
+        // --- what the hearts were about ---------------------------------------------------
+        check(waitFor(.declare, within: KissRoutine.kissDuration + 1),
+              "once the hearts have gone, one of them says what it meant",
               "phase \(kissPhase.map { $0.rawValue } ?? "none")")
-        check(!kissHeartsAreUp, "the hearts come down with it")
+        check(!kissHeartsAreUp, "the hearts are down before the bubble goes up")
+        check(pets.first { $0.interaction.isTalking }?.interaction.lastReply
+              == Phrasebook.loveLine.opener,
+              "it says \"\(Phrasebook.loveLine.opener)\"",
+              "got \(pets.first { $0.interaction.isTalking }?.interaction.lastReply ?? "nothing")")
+
+        // --- the answer -----------------------------------------------------------------
+        check(waitFor(.reply, within: KissRoutine.declareDuration + 1),
+              "the other cat answers", "phase \(kissPhase.map { $0.rawValue } ?? "none")")
+        let answerer = pets.first { $0.interaction.isTalking }
+        check(answerer != nil, "a bubble is up for the answer")
+        check(answerer !== talker, "and it belongs to the other cat, not the one that spoke")
+        check(answerer?.interaction.lastReply == Phrasebook.loveLine.reply,
+              "it says \"\(Phrasebook.loveLine.reply)\"",
+              "got \(answerer?.interaction.lastReply ?? "nothing")")
+        check(pets.filter { $0.interaction.isTalking }.count == 1,
+              "and only one bubble is up — two cats this close have room for one")
+
+        // --- parting --------------------------------------------------------------------
+        check(waitFor(.part, within: KissRoutine.replyDuration + 1), "the kiss ends",
+              "phase \(kissPhase.map { $0.rawValue } ?? "none")")
+        check(pets.allSatisfy { !$0.interaction.isTalking },
+              "the last bubble comes down with it")
+        check(!kissHeartsAreUp, "and there are no hearts left on screen")
         check(pets.allSatisfy { $0.behavior.state == .walk }, "and both cats walk away",
               "got \(pets.map { $0.behavior.state.rawValue })")
 

@@ -73,7 +73,7 @@ enum MeetingTests {
         check(Phrasebook.birthdayLines.count >= 2,
               "the birthday pool has at least two lines, so it can avoid repeating")
         for line in Phrasebook.birthdayLines {
-            let withName = Phrasebook.render(line, name: "Philippine")
+            let withName = Phrasebook.render(line, name: "Sam")
             let without = Phrasebook.render(line, name: nil)
             check(!withName.contains(Phrasebook.nameSlot),
                   "the name slot is filled: \(withName)")

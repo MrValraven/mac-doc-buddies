@@ -1327,9 +1327,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuBarItemDelegate, S
             // frame cannot leave the pair sitting there forever waiting on a window.
             hearts.start { [weak self] in self?.kiss?.hearts = nil }
 
+        case .declare:
+            // The hearts come down here rather than being left to their own timer: the two
+            // run to the same length, but a stalled frame can leave the window up past the
+            // phase, and a bubble under it is the glitch `.kiss` took the last one down for.
+            kiss?.hearts?.dismiss()
+            kiss?.hearts = nil
+            print("[kiss] pet \(left.index) → \"\(Phrasebook.loveLine.opener)\"")
+            left.interaction.showBubble(Phrasebook.loveLine.opener)
+
+        case .reply:
+            // One bubble at a time, as in the meeting: two cats standing against each other
+            // have room for one, and two at once would sit on top of one another.
+            left.interaction.dismissBubble()
+            print("[kiss] pet \(right.index) → \"\(Phrasebook.loveLine.reply)\"")
+            right.interaction.showBubble(Phrasebook.loveLine.reply)
+
         case .part:
             kiss?.hearts?.dismiss()
             kiss?.hearts = nil
+            right.interaction.dismissBubble()
             for pet in [left, right] {
                 pet.walker.reverse()
                 pet.behavior.force(.walk)

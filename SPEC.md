@@ -789,8 +789,12 @@ each other and kiss instead of trading a line.
   about timing itself.
 - The sequence: **approach** (both walk to the point between them, facing each other) →
   **announce** (the left-hand cat says *"Bisou, bisou!"* in the ordinary bubble) → **kiss**
-  (bubble down, four hearts rise and fade) → **part** (both turn around and walk away, still
-  under the routine, so the overlap they are standing in is not read as a fresh meeting).
+  (bubble down, four hearts rise and fade) → **declare** (hearts down, the left-hand cat says
+  *"I love you"*) → **reply** (that bubble down, the right-hand cat answers *"And I love
+  youu"*) → **part** (both turn around and walk away, still under the routine, so the overlap
+  they are standing in is not read as a fresh meeting). One bubble at a time throughout, and
+  never a bubble while the hearts are up — two cats standing against each other have room
+  for one thing on screen above them.
 - **Walking to a place is a new primitive**, `Walker.walk(toward:by:maxDistance:)`, and it is
   deliberately not built on `advance`: that method's whole job is turning round at the ends,
   which is the one thing a cat crossing the Dock to meet another must not do. It shares the

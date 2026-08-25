@@ -162,8 +162,8 @@ cursor is genuinely over the art. `--interaction-test` prints the exact region:
 Give `pets` two entries and both walk the Dock:
 
 ```json
-{ "pets": [ { "name": "Mochi", "color": "olive", "userName": "Philippine" },
-            { "name": "Tigre", "color": "tuxedo", "userName": "Tiago" } ] }
+{ "pets": [ { "name": "Mochi", "color": "olive", "userName": "Sam" },
+            { "name": "Tigre", "color": "tuxedo", "userName": "Alex" } ] }
 ```
 
 Each cat has its own coat, its own name and its own behaviour clock, so they don't idle and
@@ -182,9 +182,9 @@ Roughly one meeting in five becomes a kiss instead of a conversation, and you ca
 one at any time from either cat's click menu — **Kiss the other cat**.
 
 The two walk to the point between them, whatever else they were doing, and stop when they
-touch. The left-hand one says *"Bisou, bisou!"*, the bubble comes down, four hearts rise
-and fade over the pair, and then both turn around and walk away. About six seconds end to
-end.
+touch. The left-hand one says *"Bisou, bisou!"*, the bubble comes down, and four hearts rise
+and fade over the pair. Then the same cat says *"I love you"*, the other answers *"And I love
+youu"*, and both turn around and walk away. About nine seconds end to end.
 
 Set `"kisses": false` — or clear **Let them kiss** in Settings — to switch off both the
 spontaneous kiss and the menu item. If the pair cannot reach each other within ten seconds

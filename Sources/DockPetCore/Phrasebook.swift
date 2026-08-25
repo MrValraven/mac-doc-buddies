@@ -198,6 +198,14 @@ extension Phrasebook {
     /// running — for a moment that is meant to be the same every time.
     public static let kissLine = "Bisou, bisou!"
 
+    /// What the pair says to each other once the hearts have faded.
+    ///
+    /// A `MeetingLine` rather than two strings because that is what it is: a line and the
+    /// answer that only makes sense after it. Fixed for the same reason `kissLine` is —
+    /// this is the one moment the app is not trying to be surprising. The extra "u" is not
+    /// a typo.
+    public static let loveLine = MeetingLine(opener: "I love you", reply: "And I love youu")
+
     public static let meetingPairs: [MeetingLine] = [
         MeetingLine(opener: "Oh — hello, {name}.",
                     reply: "Hello yourself, {name}."),

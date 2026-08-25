@@ -239,7 +239,7 @@ enum ConfigTests {
 
         do {
             let json = Data("""
-            {"pets": [{"name": "Mochi", "color": "orange", "userName": "Philippine"},
+            {"pets": [{"name": "Mochi", "color": "orange", "userName": "Sam"},
                       {"name": "Tigre", "color": "tuxedo"}]}
             """.utf8)
             let parsed = try! JSONDecoder().decode(PetConfig.self, from: json).validated().config
@@ -248,7 +248,7 @@ enum ConfigTests {
             eq(parsed.pets[1].color, "tuxedo", "the second keeps its coat")
             eq(parsed.pets[1].userName, nil, "an absent userName stays absent")
             eq(parsed.color, "orange", "the legacy color mirrors pet 0")
-            eq(parsed.userName, "Philippine", "the legacy userName mirrors pet 0")
+            eq(parsed.userName, "Sam", "the legacy userName mirrors pet 0")
         }
 
         do {
